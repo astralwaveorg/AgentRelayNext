@@ -21,6 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: aarch64-apple-darwin
+          components: rustfmt, clippy
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Verify candidate
