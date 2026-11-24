@@ -388,7 +388,6 @@ fn usage_record(stage: Stage, value: &Value) -> Option<(&'static str, Value)> {
         Stage::Review => {
             let actual = match value["actual_model"].as_str()? {
                 GO_MODEL => GO_MODEL,
-                "zhipuai/glm-5.3-flash" => "zhipuai/glm-5.3-flash",
                 _ => return None,
             };
             let billing = &value["charge_attribution"];

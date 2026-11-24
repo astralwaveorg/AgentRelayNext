@@ -41,7 +41,7 @@ Claude Code + MiniMax-M3.1-Flash  ── 实现 ──┐
                               固定本地测试 + 收据
                                             │
                                             ▼
-OpenCode Go + GLM-5.3-Flash  ── 只读评审补丁 + 收据
+OpenCode Go + DeepSeek-V4.1-Flash  ── 只读评审补丁 + 收据
                                             │
                                             ▼
                               补丁 + 测试收据 + 评审证据
@@ -54,7 +54,7 @@ OpenCode Go + GLM-5.3-Flash  ── 只读评审补丁 + 收据
 
 - **Claude Code + MiniMax-M3.1-Flash** 实现
 - 批准的本地命令验证（固定 argv，不经 shell）
-- **OpenCode Go + glm-5.3-flash** 独立只读评审
+- **OpenCode Go + deepseek-v4.1-flash** 独立只读评审
 - 一个任务、一次 attempt、无自动重试或降级
 
 离线演示使用两个本地 fake adapter，不需要账户或网络。

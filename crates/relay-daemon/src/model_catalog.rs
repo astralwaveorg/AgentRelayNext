@@ -25,8 +25,8 @@ fn entries() -> Value {
             "notes":"M Plan Credits 可能被使用；供应商扣费归属没有可靠回传，记 unverified。"
         },
         {
-            "id":"opencode-go/glm-5.3-flash",
-            "aliases":["zhipuai/glm-5.3-flash"],
+            "id":"opencode-go/deepseek-v4.1-flash",
+            "aliases":["deepseek-v4.1-flash"],
             "provider":"OpenCode Go",
             "tool":"OpenCode",
             "roles":["review"],

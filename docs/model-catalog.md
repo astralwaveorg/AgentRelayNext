@@ -18,7 +18,7 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 | ID | 工具 | 角色 | 能力 | 费用类别 | 生产 |
 | --- | --- | --- | --- | --- | --- |
 | `minimax/MiniMax-M3.1-Flash` | Claude Code | 实现 | 读/写文件 | existing_subscription | 是 |
-| `opencode-go/glm-5.3-flash`（别名 `zhipuai/glm-5.3-flash`） | OpenCode Go | 只读评审 | 读文件 | existing_subscription | 是 |
+| `opencode-go/deepseek-v4.1-flash`（别名 `deepseek-v4.1-flash`） | OpenCode Go | 只读评审 | 读文件 | existing_subscription | 是 |
 | `offline/fake-implementer-v1` | 本地 fake | 实现 | 读/写文件 | free_tier | 否 |
 | `offline/fake-reviewer-v1` | 本地 fake | 只读评审 | 读文件 | free_tier | 否 |
 

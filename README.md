@@ -47,7 +47,7 @@ Claude Code + MiniMax-M3.1-Flash  ── writes ──┐
                               fixed local tests + receipt
                                               │
                                               ▼
-OpenCode Go + GLM-5.3-Flash  ── read-only review of patch + receipt
+OpenCode Go + DeepSeek-V4.1-Flash  ── read-only review of patch + receipt
                                               │
                                               ▼
                               patch + test receipt + review evidence
@@ -60,7 +60,7 @@ The default first-release route is intentionally fixed:
 
 - implement with **Claude Code + MiniMax-M3.1-Flash**
 - verify with an approved local command (no shell, fixed argv)
-- review with **OpenCode Go + glm-5.3-flash**, read-only
+- review with **OpenCode Go + deepseek-v4.1-flash**, read-only
 - one task, one attempt, no automatic retry or fallback
 
 The offline demo uses two local fake adapters and needs no account or network.

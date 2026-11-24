@@ -31,9 +31,9 @@ HTTP 认证、限流、请求不匹配、实际模型不符或缺终态都停止
 
 评审样本使用同样的标准输入密钥方式，子命令改为 `route-pilot review-run "$opencode" --approve '<review-approval>' --allow-plan-credits`。从 `review-preview` 复制该指纹，不能复用 Claude Code 的批准。先确认原生账户对 `MiniMax-M3` 的实际使用资格和扣减规则；供应商的 [Anthropic API 模型列表](https://platform.minimax.io/docs/api-reference/text-anthropic-api.md) 以及 [M Plan FAQ](https://platform.minimax.io/docs/m-plan/faq.md) 不能证明单个账户的权益。两个样本都通过只表示工具能按预览到达各自模型并正常完成；还需在实际账户核对扣减，并用获准的工作样本验证真实实现、评审和最终人工放行。
 
-## OpenCode Go：GLM-5.3-Flash
+## OpenCode Go：DeepSeek-V4.1-Flash
 
-`go-preview` 与 `go-offline-check` 核验 `opencode-go/glm-5.3-flash`。这条路线使用 OpenCode Go 官方模型目录列出的 Chat Completions 接口，不使用上文的 MiniMax 评审候选。在仓库开发版中可这样重跑：
+`go-preview` 与 `go-offline-check` 核验 `opencode-go/deepseek-v4.1-flash`。这条路线使用 OpenCode Go 官方模型目录列出的 Chat Completions 接口，不使用上文的 MiniMax 评审候选。在仓库开发版中可这样重跑：
 
 ```sh
 cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go-preview /opt/homebrew/bin/opencode

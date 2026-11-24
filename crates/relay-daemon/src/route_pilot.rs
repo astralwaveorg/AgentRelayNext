@@ -15,7 +15,7 @@ pub(crate) const CN_ENDPOINT: &str = "https://api.minimax.cn/anthropic/v1/messag
 pub(crate) const MODEL: &str = "MiniMax-M3.1-Flash";
 pub(crate) const GO_ENDPOINT: &str = "https://opencode.ai/inference/go/openai/v1/chat/completions";
 pub(crate) const GO_USAGE: &str = "https://opencode.ai/inference/go/v1/usage";
-pub(crate) const GO_MODEL: &str = "glm-5.3-flash";
+pub(crate) const GO_MODEL: &str = "deepseek-v4.1-flash";
 const REVIEW_MODEL: &str = "MiniMax-M3";
 const SAMPLE: &str = "Return precisely this ASCII text and nothing else: relay-pilot-ok";
 const REVIEW_SAMPLE: &str = r#"Read-only qualification sample. Return only this JSON object without Markdown: {"verdict":"pass","sample":"relay-pilot-review-ok"}"#;
@@ -975,7 +975,7 @@ pub(crate) fn go_response(bytes: &[u8]) -> Pilot<(String, Value)> {
     let response =
         relay_protocol::frame::decode_json_value(body).map_err(|_| "UPSTREAM_PROTOCOL")?;
     let model = response["model"].as_str().ok_or("MODEL_MISMATCH")?;
-    if !matches!(model, GO_MODEL | "zhipuai/glm-5.3-flash") {
+    if model != GO_MODEL {
         return Err("MODEL_MISMATCH");
     }
     let choices = response["choices"].as_array().ok_or("UPSTREAM_PROTOCOL")?;
@@ -1499,7 +1499,7 @@ mod tests {
             0
         );
         for (fields, change, failure) in [
-            (&["model"][..], json!("glm-5.3"), "MODEL_MISMATCH"),
+            (&["model"][..], json!("other-model"), "MODEL_MISMATCH"),
             (
                 &["choices", "0", "finish_reason"],
                 json!("length"),
