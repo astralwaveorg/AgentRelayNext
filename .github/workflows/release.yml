@@ -11,10 +11,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Verify candidate
@@ -37,6 +39,9 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build app, ZIP, and DMG
+        env:
+          RELAY_TARGET: aarch64-apple-darwin
+          RELAY_NO_EXEC: "1"
         run: |
           version="${{ steps.version.outputs.version }}"
           out="$RUNNER_TEMP/dist"

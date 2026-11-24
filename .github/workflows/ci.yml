@@ -10,14 +10,18 @@ permissions:
 
 jobs:
   verify:
-    runs-on: macos-14
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Full Rust checks
         run: ./scripts/check full
+      - name: Cross-build arm64 relayctl
+        run: cargo build --release --locked --offline --target aarch64-apple-darwin -p relay-daemon --bin relayctl
       - name: Compile SwiftUI app
         run: |
           version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/relay-daemon/Cargo.toml)"

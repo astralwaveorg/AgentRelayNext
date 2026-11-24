@@ -10,7 +10,11 @@ APP="$1"; OUT="$2"
 case "$OUT" in *.dmg) ;; *) echo "输出必须以 .dmg 结尾" >&2; exit 2;; esac
 RELAY="$APP/Contents/Resources/relay/relayctl"
 [ -x "$RELAY" ] || { echo "缺少 relayctl" >&2; exit 1; }
-VERSION="$("$RELAY" version)"
+if [ "${RELAY_NO_EXEC:-0}" = 1 ]; then
+  VERSION="$(cat "$APP/Contents/Resources/relay/version.json")"
+else
+  VERSION="$("$RELAY" version)"
+fi
 WORK="$(mktemp -d /private/tmp/relay-dmg-build.XXXXXX)"
 MOUNT="$(mktemp -d /private/tmp/relay-dmg-mount.XXXXXX)"
 STAGE="$WORK/stage"
@@ -41,7 +45,11 @@ SHA="$(/usr/bin/shasum -a 256 "$OUT" | awk '{print $1}')"
 [ -L "$MOUNT/Applications" ] || { echo "DMG 内缺少 Applications 链接" >&2; exit 1; }
 [ -x "$MOUNT/RelayTaskWindow.app/Contents/Resources/relay/relayctl" ] ||
   { echo "DMG 内缺少 relayctl" >&2; exit 1; }
-MOUNT_VERSION="$("$MOUNT/RelayTaskWindow.app/Contents/Resources/relay/relayctl" version)"
+if [ "${RELAY_NO_EXEC:-0}" = 1 ]; then
+  MOUNT_VERSION="$(cat "$MOUNT/RelayTaskWindow.app/Contents/Resources/relay/version.json")"
+else
+  MOUNT_VERSION="$("$MOUNT/RelayTaskWindow.app/Contents/Resources/relay/relayctl" version)"
+fi
 /usr/bin/hdiutil detach "$MOUNT" >/dev/null
 printf '%s\n' "$SHA" > "$OUT.sha256"
 cat > "$OUT.manifest.json" <<JSON
