@@ -25,6 +25,9 @@ impl Transcript {
                 if frame["subtype"] == "status"
                     && !self.ended
                     && frame["status"] == "requesting" => {}
+            // Progress-only frames emitted while extended thinking streams.
+            Some("system")
+                if frame["subtype"] == "thinking_tokens" && self.started && !self.ended => {}
             Some("system") if !self.initialized && frame["subtype"] == "init" => {
                 for field in ["tools", "mcp_servers", "skills", "slash_commands"] {
                     if frame[field]
@@ -227,5 +230,28 @@ mod tests {
             validate(tools.as_slice(), "m"),
             Err("UNEXPECTED_TOOL_SURFACE")
         );
+    }
+
+    #[test]
+    fn thinking_progress_frames_are_allowed_while_streaming() {
+        let transcript = concat!(
+            r#"{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"skills":[],"slash_commands":[],"permissionMode":"dontAsk","plugins":[],"agents":[]}"#,
+            "\n",
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{"model":"m"}}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":1,"estimated_tokens_delta":1}"#,
+            "\n",
+            r#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"thinking"}}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":7,"estimated_tokens_delta":6}"#,
+            "\n",
+            r#"{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"}}}"#,
+            "\n",
+            r#"{"type":"stream_event","event":{"type":"message_stop"}}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success","is_error":false,"num_turns":1,"stop_reason":"end_turn","permission_denials":[],"result":"test"}"#,
+            "\n"
+        );
+        assert_eq!(validate(transcript.as_bytes(), "m"), Ok("test".to_owned()));
     }
 }
