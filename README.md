@@ -69,7 +69,7 @@ The offline demo uses two local fake adapters and needs no account or network.
 
 ### 1. Download the DMG
 
-Download `RelayTaskWindow-0.1.23.dmg` from the GitHub Release and verify it:
+Download `RelayTaskWindow-0.1.23.dmg` from the [latest GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) and verify it:
 
 ```sh
 shasum -a 256 RelayTaskWindow-0.1.23.dmg

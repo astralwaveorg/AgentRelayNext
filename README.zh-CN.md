@@ -63,7 +63,7 @@ OpenCode Go + GLM-5.3-Flash  ── 只读评审补丁 + 收据
 
 ### 1. 下载 DMG
 
-从 GitHub Release 下载 `RelayTaskWindow-0.1.23.dmg`，核对摘要：
+从 [最新 GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) 下载 `RelayTaskWindow-0.1.23.dmg`，核对摘要：
 
 ```sh
 shasum -a 256 RelayTaskWindow-0.1.23.dmg
