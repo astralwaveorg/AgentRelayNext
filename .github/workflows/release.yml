@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -77,7 +76,7 @@ jobs:
           body_path: ${{ runner.temp }}/dist/RELEASE_NOTES.md
           draft: false
           prerelease: false
-          overwrite_files: true
+          overwrite_files: false
           files: |
             ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg
             ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg.sha256

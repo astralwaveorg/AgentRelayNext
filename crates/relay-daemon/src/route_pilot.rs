@@ -44,6 +44,28 @@ pub(crate) fn is_minimax_endpoint(endpoint: &str) -> bool {
     endpoint == ENDPOINT || endpoint == CN_ENDPOINT
 }
 
+pub(crate) fn go_model_value(value: Option<&str>) -> Pilot<String> {
+    let model = value.unwrap_or(GO_MODEL);
+    if model.is_empty()
+        || model.len() > 128
+        || !model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+        || model == MODEL
+    {
+        return Err("GO_MODEL_INVALID");
+    }
+    Ok(model.to_owned())
+}
+
+pub(crate) fn go_model() -> Pilot<String> {
+    match std::env::var("RELAY_GO_MODEL") {
+        Ok(value) => go_model_value(Some(&value)),
+        Err(std::env::VarError::NotPresent) => go_model_value(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err("GO_MODEL_INVALID"),
+    }
+}
+
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
@@ -68,9 +90,9 @@ fn request() -> Value {
     })
 }
 
-fn review_request(model: &str) -> Value {
-    if model == GO_MODEL {
-        return json!({"model":GO_MODEL,"max_tokens":512,"stream":false,"reasoning_effort":"low",
+fn review_request(model: &str, go: bool) -> Value {
+    if go {
+        return json!({"model":model,"max_tokens":512,"stream":false,"reasoning_effort":"low",
             "messages":[{"role":"user","content":REVIEW_SAMPLE}]});
     }
     json!({
@@ -113,6 +135,7 @@ fn plan(cli: &Path, review: bool, go: bool, edit: bool) -> Pilot<Value> {
     if !cfg!(target_os = "macos") || !cli.is_file() {
         return Err("PILOT_REQUIRES_MACOS_CLI");
     }
+    let review_model = if go { Some(go_model()?) } else { None };
     let details = json!({
         "provider":if go {"OpenCode Go"} else {"MiniMax"},
         "key_kind":if go {"Console API key from the subscribed workspace"} else {"M Plan subscription key"},
@@ -120,7 +143,7 @@ fn plan(cli: &Path, review: bool, go: bool, edit: bool) -> Pilot<Value> {
             else {"operator must confirm available plan and that credits are acceptable if used; actual debit unverified"},
         "endpoint":if go {GO_ENDPOINT} else {minimax_endpoint()?},
         "quota_endpoint":go.then_some(GO_USAGE),
-        "request":if review { review_request(if go {GO_MODEL} else {REVIEW_MODEL}) } else if edit { edit_request() } else { request() },
+        "request":if review { review_request(review_model.as_deref().unwrap_or(REVIEW_MODEL), go) } else if edit { edit_request() } else { request() },
         "sample":if edit { "bounded_file_edit" } else { "route_probe" },
         "role":if review {"review"} else {"implement"},
         "tool":if review {"opencode"} else {"claude-code"},
@@ -920,12 +943,16 @@ fn review_sample(
     go: bool,
     send: impl FnOnce() -> Pilot<Vec<u8>>,
 ) -> Pilot<Value> {
-    let model = if go { GO_MODEL } else { REVIEW_MODEL };
+    let model = if go {
+        go_model()?
+    } else {
+        REVIEW_MODEL.to_owned()
+    };
     let mut evidence = None;
-    let report = crate::opencode_review::pilot_session(cli, tmp, model, || {
+    let report = crate::opencode_review::pilot_session(cli, tmp, &model, || {
         let bytes = send()?;
         if go {
-            let (result, report) = go_response(&bytes)?;
+            let (result, report) = go_response(&bytes, &model)?;
             if relay_protocol::frame::decode_json_value(result.trim()).ok() != Some(review_result())
             {
                 return Err("SAMPLE_UNEXPECTED");
@@ -933,10 +960,10 @@ fn review_sample(
             evidence = Some(report);
             // The isolated harness speaks Messages; forward only the vetted sample
             // content. Provider evidence below always comes from the original JSON.
-            return Ok(fixture_for(model, result.as_str()));
+            return Ok(fixture_for(&model, result.as_str()));
         }
-        let usage = provider_evidence(&bytes, model)?;
-        evidence = Some(json!({"actual_model":model,"terminal":"end_turn",
+        let usage = provider_evidence(&bytes, &model)?;
+        evidence = Some(json!({"actual_model":&model,"terminal":"end_turn",
             "charge_attribution":"unverified","provider_usage":usage,
             "usage_source":"provider_messages_sse"}));
         Ok(bytes)
@@ -970,12 +997,12 @@ pub(crate) fn go_meters(bytes: &[u8]) -> Pilot<Value> {
     Ok(report)
 }
 
-pub(crate) fn go_response(bytes: &[u8]) -> Pilot<(String, Value)> {
+pub(crate) fn go_response(bytes: &[u8], expected_model: &str) -> Pilot<(String, Value)> {
     let body = std::str::from_utf8(bytes).map_err(|_| "UPSTREAM_PROTOCOL")?;
     let response =
         relay_protocol::frame::decode_json_value(body).map_err(|_| "UPSTREAM_PROTOCOL")?;
     let model = response["model"].as_str().ok_or("MODEL_MISMATCH")?;
-    if model != GO_MODEL {
+    if model != expected_model {
         return Err("MODEL_MISMATCH");
     }
     let choices = response["choices"].as_array().ok_or("UPSTREAM_PROTOCOL")?;
@@ -1023,8 +1050,8 @@ pub(crate) fn go_response(bytes: &[u8]) -> Pilot<(String, Value)> {
     ))
 }
 
-fn go_fixture_for(result: &Value) -> Value {
-    json!({"model":GO_MODEL,
+fn go_fixture_for(model: &str, result: &Value) -> Value {
+    json!({"model":model,
         "choices":[{"finish_reason":"stop","message":{"role":"assistant","content":result.to_string()}}],
         "usage":{"prompt_tokens":30,"completion_tokens":12,"cost":0,
         "opencode":{"billing_source":"go","allowance":0.00001}}})
@@ -1033,19 +1060,19 @@ fn go_fixture_for(result: &Value) -> Value {
 const PAIR_REVIEW_PROMPT: &str = "Review only the supplied synthetic text change and its test receipt. Return one JSON object with schema_version 1, verdict (pass or changes_requested), candidate_diff_sha256, test_receipt_sha256 and findings. Repeat both digests unchanged. Use pass only if the patch changes status=waiting to status=ready, preserves the final newline and the exact-byte test passed. If requesting changes, include a finding with severity, evidence and suggestion. Do not run tools.";
 const PAIR_CONTENT_LIMIT: usize = 8 * 1024;
 
-fn pair_review_request(payload: &Value) -> Value {
-    let mut body = review_request(GO_MODEL);
+fn pair_review_request(model: &str, payload: &Value) -> Value {
+    let mut body = review_request(model, true);
     body["messages"][0]["content"] = format!("{PAIR_REVIEW_PROMPT} Data: {payload}").into();
     body
 }
 
-fn pair_preview(claude: &Path, opencode: &Path) -> Pilot<Value> {
+fn pair_preview(review_model: &str, claude: &Path, opencode: &Path) -> Pilot<Value> {
     let implementation = plan(claude, false, false, true)?;
     let review = plan(opencode, true, true, false)?;
     let details = json!({
         "implementation":implementation["details"],
         "review":{
-            "tool":"opencode","model":GO_MODEL,"endpoint":GO_ENDPOINT,"quota_endpoint":GO_USAGE,
+            "tool":"opencode","model":review_model,"endpoint":GO_ENDPOINT,"quota_endpoint":GO_USAGE,
             "cli":review["details"]["cli"],"cli_sha256":review["details"]["cli_sha256"],
             "prompt":PAIR_REVIEW_PROMPT,"payload_source":"synthetic diff and test status; full receipt stays local",
             "payload_fields":["goal","diff","receipt","candidate_diff_sha256","test_receipt_sha256"],
@@ -1066,12 +1093,13 @@ fn audit_pair(
     root: &Path,
     claude: &Path,
     opencode: &Path,
+    review_model: &str,
     implement: impl FnOnce() -> Pilot<Vec<u8>>,
     review: impl FnOnce(&Value, &Value) -> Pilot<Vec<u8>>,
 ) -> Pilot<Value> {
     let edit = edit_sample(root, claude, implement)?;
     let payload = edit.review_payload()?;
-    let request = pair_review_request(&payload);
+    let request = pair_review_request(review_model, &payload);
     if request.to_string().len() > PAIR_CONTENT_LIMIT {
         return Err("PAIR_REVIEW_INPUT_LIMIT");
     }
@@ -1081,18 +1109,23 @@ fn audit_pair(
         .create(&home)
         .map_err(|_| "PILOT_TEMP")?;
     let mut evidence = None;
-    let report =
-        crate::opencode_review::pilot_review_candidate(opencode, &home, root, GO_MODEL, || {
+    let report = crate::opencode_review::pilot_review_candidate(
+        opencode,
+        &home,
+        root,
+        review_model,
+        || {
             let data = review(&request, &payload)?;
-            let (content, upstream) = go_response(&data)?;
+            let (content, upstream) = go_response(&data, review_model)?;
             if content.len() > 16 * 1024
                 || relay_protocol::frame::decode_json_value(content.trim()).is_err()
             {
                 return Err("PAIR_REVIEW_PROTOCOL");
             }
             evidence = Some(upstream);
-            Ok(fixture_for(GO_MODEL, &content))
-        })?;
+            Ok(fixture_for(review_model, &content))
+        },
+    )?;
     edit.unchanged()?;
     let diff = edit.evidence["diff_sha256"]
         .as_str()
@@ -1128,7 +1161,8 @@ fn pair_entry(action: &str, claude_bin: &str, args: &[String]) -> Pilot<Value> {
     if claude == opencode {
         return Err("PAIR_DISTINCT_CLIS_REQUIRED");
     }
-    let preview = pair_preview(&claude, &opencode)?;
+    let review_model = go_model()?;
+    let preview = pair_preview(&review_model, &claude, &opencode)?;
     match (action, rest) {
         ("preview", []) => Ok(preview),
         ("offline-check", [] | [_]) => {
@@ -1143,6 +1177,7 @@ fn pair_entry(action: &str, claude_bin: &str, args: &[String]) -> Pilot<Value> {
                 &tmp.0,
                 &claude,
                 &opencode,
+                &review_model,
                 || Ok(edit_fixture()),
                 |_, payload| {
                     let mut report = json!({
@@ -1153,7 +1188,9 @@ fn pair_entry(action: &str, claude_bin: &str, args: &[String]) -> Pilot<Value> {
                     if let Some(field) = stale {
                         report[field] = "0".repeat(64).into();
                     }
-                    Ok(go_fixture_for(&report).to_string().into_bytes())
+                    Ok(go_fixture_for(&review_model, &report)
+                        .to_string()
+                        .into_bytes())
                 },
             )?;
             Ok(json!({"mode":"synthetic_pair","external_requests":0,"evidence":evidence}))
@@ -1187,6 +1224,7 @@ fn pair_entry(action: &str, claude_bin: &str, args: &[String]) -> Pilot<Value> {
                     &tmp.0,
                     &claude,
                     &opencode,
+                    &review_model,
                     || upstream(claude_key, endpoint, Some(&edit_request())),
                     |request, _| {
                         go_meters(&upstream(go_key, GO_USAGE, None)?)?;
@@ -1278,7 +1316,9 @@ fn entry(args: &[String]) -> Pilot<Value> {
             let evidence = if review {
                 review_sample(&tmp.0, &cli, go, || {
                     if go {
-                        Ok(go_fixture_for(&review_result()).to_string().into_bytes())
+                        Ok(go_fixture_for(&go_model()?, &review_result())
+                            .to_string()
+                            .into_bytes())
                     } else {
                         Ok(fixture_for(REVIEW_MODEL, &review_result().to_string()))
                     }
@@ -1309,14 +1349,15 @@ fn entry(args: &[String]) -> Pilot<Value> {
                 let key = subscription_key(&input, go)?;
                 let tmp = Temp::new()?;
                 if go {
+                    let review_model = go_model()?;
                     go_meters(&upstream(key, GO_USAGE, None)?)?;
                     review_sample(&tmp.0, &cli, true, || {
-                        upstream(key, GO_ENDPOINT, Some(&review_request(GO_MODEL)))
+                        upstream(key, GO_ENDPOINT, Some(&review_request(&review_model, true)))
                     })
                 } else if review {
                     let endpoint = minimax_endpoint()?;
                     review_sample(&tmp.0, &cli, false, || {
-                        upstream(key, endpoint, Some(&review_request(REVIEW_MODEL)))
+                        upstream(key, endpoint, Some(&review_request(REVIEW_MODEL, false)))
                     })
                 } else if edit {
                     let endpoint = minimax_endpoint()?;
@@ -1369,7 +1410,7 @@ mod tests {
         for (endpoint, body) in [
             (ENDPOINT, Some(edit_request())),
             (CN_ENDPOINT, Some(edit_request())),
-            (GO_ENDPOINT, Some(review_request(GO_MODEL))),
+            (GO_ENDPOINT, Some(review_request(GO_MODEL, true))),
             (GO_USAGE, None),
         ] {
             let cmd = upstream_command(endpoint, body.as_ref()).unwrap();
@@ -1400,6 +1441,22 @@ mod tests {
         assert!(is_minimax_endpoint(ENDPOINT));
         assert!(is_minimax_endpoint(CN_ENDPOINT));
         assert!(!is_minimax_endpoint(GO_ENDPOINT));
+    }
+
+    #[test]
+    fn go_model_defaults_and_rejects_invalid_overrides() {
+        assert_eq!(go_model_value(None), Ok(GO_MODEL.to_owned()));
+        assert_eq!(
+            go_model_value(Some("zhipuai/glm-5.3-flash")),
+            Ok("zhipuai/glm-5.3-flash".to_owned())
+        );
+        assert_eq!(go_model_value(Some("")), Err("GO_MODEL_INVALID"));
+        assert_eq!(go_model_value(Some("bad model")), Err("GO_MODEL_INVALID"));
+        assert_eq!(go_model_value(Some(MODEL)), Err("GO_MODEL_INVALID"));
+        assert_eq!(
+            go_model_value(Some(&"a".repeat(129))),
+            Err("GO_MODEL_INVALID")
+        );
     }
 
     #[test]
@@ -1493,9 +1550,14 @@ mod tests {
         );
         assert_eq!(go_meters(b"{}"), Err("GO_USAGE_PROTOCOL"));
         assert_eq!(
-            go_response(go_fixture_for(&review_result()).to_string().as_bytes())
-                .unwrap()
-                .1["charge_attribution"]["balance_charge_usd"],
+            go_response(
+                go_fixture_for(GO_MODEL, &review_result())
+                    .to_string()
+                    .as_bytes(),
+                GO_MODEL,
+            )
+            .unwrap()
+            .1["charge_attribution"]["balance_charge_usd"],
             0
         );
         for (fields, change, failure) in [
@@ -1522,7 +1584,7 @@ mod tests {
             ),
             (&["usage", "cost"], json!(0.005), "GO_BILLING_NOT_INCLUDED"),
         ] {
-            let mut fixture = go_fixture_for(&review_result());
+            let mut fixture = go_fixture_for(GO_MODEL, &review_result());
             let path = format!("/{}", fields.join("/"));
             if let Some(value) = fixture.pointer_mut(&path) {
                 *value = change;
@@ -1530,7 +1592,7 @@ mod tests {
                 fixture["choices"][0]["message"]["tool_calls"] = change;
             }
             assert_eq!(
-                go_response(fixture.to_string().as_bytes()),
+                go_response(fixture.to_string().as_bytes(), GO_MODEL),
                 Err(failure),
                 "{path}"
             );

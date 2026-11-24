@@ -33,7 +33,7 @@ HTTP 认证、限流、请求不匹配、实际模型不符或缺终态都停止
 
 ## OpenCode Go：DeepSeek-V4.1-Flash
 
-`go-preview` 与 `go-offline-check` 核验 `opencode-go/deepseek-v4.1-flash`。这条路线使用 OpenCode Go 官方模型目录列出的 Chat Completions 接口，不使用上文的 MiniMax 评审候选。在仓库开发版中可这样重跑：
+`go-preview` 与 `go-offline-check` 核验 `opencode-go/deepseek-v4.1-flash`。这条路线使用 OpenCode Go 官方模型目录列出的 Chat Completions 接口，不使用上文的 MiniMax 评审候选。评审模型默认 `deepseek-v4.1-flash`；如需选择工作区已启用的其他 OpenCode Go 模型，在预览和运行前导出 `RELAY_GO_MODEL=<模型 ID>`，approval 会绑定实际模型，且不得与实现模型相同。在仓库开发版中可这样重跑：
 
 ```sh
 cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go-preview /opt/homebrew/bin/opencode

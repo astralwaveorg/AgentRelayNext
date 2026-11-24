@@ -2898,6 +2898,7 @@ impl M1Service {
                     attempt_no,
                     crate::live_routes::Stage::Implement,
                     evidence.as_ref(),
+                    None,
                 ) {
                     self.fail_adapter(task_id, attempt_no, task.revision + 2, code);
                     return;

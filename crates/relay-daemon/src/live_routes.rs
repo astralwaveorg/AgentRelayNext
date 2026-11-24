@@ -1,8 +1,8 @@
 //! Real project role pair. Only the explicitly approved local project launcher
 //! can attach this configuration to a daemon; the normal config loader cannot.
 use crate::route_pilot::{
-    self, cli_digest, is_minimax_endpoint, minimax_endpoint, subscription_key, Pilot, ProcessScope,
-    StageSandbox, Temp, GO_ENDPOINT, GO_MODEL, GO_USAGE, MODEL,
+    self, cli_digest, go_model, go_model_value, is_minimax_endpoint, minimax_endpoint,
+    subscription_key, Pilot, ProcessScope, StageSandbox, Temp, GO_ENDPOINT, GO_USAGE, MODEL,
 };
 use crate::service::AdapterProbeReport;
 use crate::workflow::{AdapterCandidate, SelectedPair};
@@ -28,6 +28,7 @@ pub struct RoutePairSpec {
     claude: SealedCli,
     go: SealedCli,
     endpoint: &'static str,
+    review_model: String,
 }
 #[derive(Debug, Clone)]
 struct SealedCli {
@@ -64,6 +65,7 @@ impl RoutePairSpec {
             claude: SealedCli::open(claude)?,
             go: SealedCli::open(go)?,
             endpoint: minimax_endpoint()?,
+            review_model: go_model()?,
         };
         if result.claude.path == result.go.path || result.claude.sha256 == result.go.sha256 {
             return Err("PAIR_DISTINCT_CLIS_REQUIRED");
@@ -79,7 +81,7 @@ impl RoutePairSpec {
                 "cli":self.claude.path,"sha256":self.claude.sha256,
                 "data":["task goal","task brief","approved existing text files","baseline hash"],
                 "max_output_tokens":4096,"billing":"M Plan Credits may be used"},
-            "review": {"tool":"OpenCode","model":GO_MODEL,"endpoint":GO_ENDPOINT,
+            "review": {"tool":"OpenCode","model":self.review_model,"endpoint":GO_ENDPOINT,
                 "cli":self.go.path,"sha256":self.go.sha256,
                 "data":["task goal","diff","test pass status and rule IDs","diff and full receipt hashes"],
                 "max_output_tokens":2048,"billing":"Go subscription; Extra Usage must be disabled"},
@@ -130,6 +132,10 @@ impl LiveRoutes {
         self.spec.go.check()
     }
 
+    pub(crate) fn review_model(&self) -> &str {
+        &self.spec.review_model
+    }
+
     pub(crate) fn selected(&self) -> SelectedPair {
         let candidate = |binary: &str, model: &str, role: &str, path: &Path| AdapterCandidate {
             path: path.to_owned(),
@@ -149,7 +155,7 @@ impl LiveRoutes {
             implementer: candidate("claude-code", MODEL, "implement", &self.spec.claude.path),
             reviewer: Some(candidate(
                 "opencode",
-                GO_MODEL,
+                &self.spec.review_model,
                 "review",
                 &self.spec.go.path,
             )),
@@ -196,6 +202,7 @@ impl LiveRoutes {
             .arg(repo)
             .arg(managed)
             .arg(self.spec.endpoint)
+            .arg(&self.spec.review_model)
             .env_clear()
             .stdin(Stdio::from(OwnedFd::from(read)));
         Ok(command)
@@ -228,7 +235,7 @@ impl Stage {
     }
 }
 
-fn body(stage: Stage, payload: &Value) -> Pilot<Value> {
+fn body(stage: Stage, payload: &Value, review_model: &str) -> Pilot<Value> {
     let encoded = serde_json::to_string(payload).map_err(|_| "PROJECT_ROUTE_INPUT")?;
     if encoded.len() > MAX_STAGE_INPUT {
         return Err("PROJECT_ROUTE_INPUT_LIMIT");
@@ -237,14 +244,14 @@ fn body(stage: Stage, payload: &Value) -> Pilot<Value> {
         Stage::Implement => json!({"model":MODEL,"max_tokens":4096,"stream":true,
             "output_config":{"effort":"low"},
             "messages":[{"role":"user","content":format!("{IMPLEMENT_INSTRUCTIONS}\nData: {encoded}")}]}),
-        Stage::Review => json!({"model":GO_MODEL,"max_tokens":2048,"stream":false,
+        Stage::Review => json!({"model":review_model,"max_tokens":2048,"stream":false,
             "reasoning_effort":"low",
             "messages":[{"role":"user","content":format!("{REVIEW_INSTRUCTIONS}\nData: {encoded}")}]}),
     })
 }
 
 fn execute(args: &[String]) -> Pilot<(Value, Value)> {
-    let [role, exe, sha, repo, managed, endpoint] = args else {
+    let [role, exe, sha, repo, managed, endpoint, review_model] = args else {
         return Err("PROJECT_ROUTE_WORKER_ARGS");
     };
     // Only a supervising process that creates a separate worker group can
@@ -258,6 +265,9 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
         _ => return Err("PROJECT_ROUTE_WORKER_ARGS"),
     };
     if !is_minimax_endpoint(endpoint) {
+        return Err("PROJECT_ROUTE_WORKER_ARGS");
+    }
+    if go_model_value(Some(review_model)).is_err() {
         return Err("PROJECT_ROUTE_WORKER_ARGS");
     }
     let exe = SealedCli {
@@ -291,7 +301,7 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
         return Err("PROJECT_ROUTE_INPUT_LIMIT");
     }
     let payload = decode_json_value(&content).map_err(|_| "PROJECT_ROUTE_WORKER_INPUT")?;
-    let request = body(stage, &payload)?;
+    let request = body(stage, &payload, review_model)?;
     let scope = ProcessScope::Tracked;
     let tmp = Temp::new()?;
     route_pilot::go_meters(&route_pilot::upstream_scoped(
@@ -324,17 +334,17 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
                 &tmp.0,
                 repo,
                 managed,
-                GO_MODEL,
+                review_model,
                 || {
                     let bytes =
                         route_pilot::upstream_scoped(scope, go_key, GO_ENDPOINT, Some(&request))?;
-                    let (report, evidence) = route_pilot::go_response(&bytes)?;
+                    let (report, evidence) = route_pilot::go_response(&bytes, review_model)?;
                     usage = Some(evidence);
                     if report.len() > MAX_REVIEW_OUTPUT || decode_json_value(report.trim()).is_err()
                     {
                         return Err("PROJECT_ROUTE_REVIEW_PROTOCOL");
                     }
-                    Ok(route_pilot::fixture_for(GO_MODEL, &report))
+                    Ok(route_pilot::fixture_for(review_model, &report))
                 },
             )?;
             Ok((result, usage.ok_or("GO_BILLING_UNVERIFIED")?))
@@ -373,7 +383,11 @@ pub fn worker(args: &[String]) -> Result<(), u8> {
 
 // Rebuild the audit record from known fields. No free text, provider payload,
 // prompt, patch, credential, or CLI stdout can enter the local event.
-fn usage_record(stage: Stage, value: &Value) -> Option<(&'static str, Value)> {
+fn usage_record(
+    stage: Stage,
+    value: &Value,
+    review_model: Option<&str>,
+) -> Option<(&'static str, Value)> {
     let usage = &value["provider_usage"];
     let input = usage["input_tokens"].as_u64();
     let output = usage["output_tokens"].as_u64();
@@ -386,10 +400,10 @@ fn usage_record(stage: Stage, value: &Value) -> Option<(&'static str, Value)> {
                 "charge_attribution":"unverified"}),
         )),
         Stage::Review => {
-            let actual = match value["actual_model"].as_str()? {
-                GO_MODEL => GO_MODEL,
-                _ => return None,
-            };
+            let actual = value["actual_model"].as_str()?;
+            if actual != review_model? {
+                return None;
+            }
             let billing = &value["charge_attribution"];
             let source = match billing["provider_reported_source"].as_str()? {
                 "go" => "go",
@@ -419,9 +433,10 @@ pub(crate) fn record_usage(
     attempt: u32,
     stage: Stage,
     event: Option<&Value>,
+    review_model: Option<&str>,
 ) -> Result<(), &'static str> {
     let (kind, data) = event
-        .and_then(|value| usage_record(stage, value))
+        .and_then(|value| usage_record(stage, value, review_model))
         .ok_or("ROUTE_USAGE_UNVERIFIED")?;
     store
         .append_event(
@@ -442,7 +457,7 @@ mod tests {
     fn usage_audit_retains_only_allowed_fields_and_distinguishes_billing() {
         let implement = json!({"actual_model":MODEL,"provider_usage":{"input_tokens":31},
             "charge_attribution":"claimed","raw":"must never persist"});
-        let (kind, record) = usage_record(Stage::Implement, &implement).unwrap();
+        let (kind, record) = usage_record(Stage::Implement, &implement, None).unwrap();
         assert_eq!(kind, "route_implement_usage");
         assert_eq!(
             record,
@@ -451,17 +466,19 @@ mod tests {
             "charge_attribution":"unverified"})
         );
 
-        let mut review = json!({"actual_model":GO_MODEL,"provider_usage":{"input_tokens":33,"output_tokens":4},
+        let mut review = json!({"actual_model":route_pilot::GO_MODEL,"provider_usage":{"input_tokens":33,"output_tokens":4},
             "charge_attribution":{"provider_reported_source":"go-plus","balance_charge_usd":0,"allowance_usd":0.002}});
-        let (kind, record) = usage_record(Stage::Review, &review).unwrap();
+        let (kind, record) =
+            usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL)).unwrap();
         assert_eq!(kind, "route_review_usage");
         assert_eq!(
             record,
-            json!({"actual_model":GO_MODEL,"input_tokens":33,"output_tokens":4,
+            json!({"actual_model":route_pilot::GO_MODEL,"input_tokens":33,"output_tokens":4,
             "provider_reported_source":"go-plus","balance_charge_usd":0,"allowance_usd":0.002})
         );
         review["charge_attribution"]["balance_charge_usd"] = json!(0.03);
-        assert!(usage_record(Stage::Review, &review).is_none());
-        assert!(usage_record(Stage::Review, &implement).is_none());
+        assert!(usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL)).is_none());
+        assert!(usage_record(Stage::Review, &implement, Some(route_pilot::GO_MODEL)).is_none());
+        assert!(usage_record(Stage::Review, &review, None).is_none());
     }
 }

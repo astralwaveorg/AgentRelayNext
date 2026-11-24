@@ -1085,13 +1085,14 @@ impl M1Service {
                     ),
                 );
             }
-            if self.config.live_routes.is_some() {
+            if let Some(routes) = self.config.live_routes.as_ref() {
                 if let Err(code) = crate::live_routes::record_usage(
                     &self.store,
                     task_id,
                     attempt_no,
                     crate::live_routes::Stage::Review,
                     run.events.provider_evidence.as_ref(),
+                    Some(routes.review_model()),
                 ) {
                     self.fail_adapter(task_id, attempt_no, revision, &format!("评审：{code}"));
                     return None;

@@ -3,6 +3,34 @@
 所有用户可见变化记录在此。产品版本以 `crates/relay-daemon/Cargo.toml` 为准；里程碑
 （M1/M2/M2.5/M3）不是版本号。
 
+## 0.1.25 — 2026-11-25
+
+### Added
+
+- `RELAY_MINIMAX_ENDPOINT` selects the pinned MiniMax implement endpoint: the
+  international default (`api.minimax.io`) or the mainland-China endpoint
+  (`api.minimax.cn`). Any other value fails closed, and the approval binds the
+  actual endpoint.
+- `RELAY_GO_MODEL` selects the OpenCode Go review model (default
+  `deepseek-v4.1-flash`). The approval binds the actual model, and a value equal
+  to the implement model is rejected.
+- Live route docs provision the two dedicated keys through the
+  `MINIMAX_API_KEY` / `OC_API_KEY` shell environment variables instead of
+  keychain lookups.
+
+### Fixed
+
+- Claude Code 2.1.326 `system/thinking_tokens` progress frames emitted while
+  extended thinking streams are accepted instead of failing the transcript as
+  an unknown frame.
+
+### Verified
+
+- One end-to-end real dual-account synthetic sample passed on this candidate:
+  implement via MiniMax `MiniMax-M3.1-Flash` (mainland-China endpoint,
+  billing attribution `unverified`), verify, and review via OpenCode Go
+  `deepseek-v4.1-flash` with `balance_charge_usd=0` and provider source `go`.
+
 ## 0.1.24 — 2026-11-24
 
 ### Fixed

@@ -19,6 +19,8 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 | --- | --- | --- | --- | --- | --- |
 | `minimax/MiniMax-M3.1-Flash` | Claude Code | 实现 | 读/写文件 | existing_subscription | 是 |
 | `opencode-go/deepseek-v4.1-flash`（别名 `deepseek-v4.1-flash`） | OpenCode Go | 只读评审 | 读文件 | existing_subscription | 是 |
+
+评审模型可用 `RELAY_GO_MODEL` 覆盖为同一工具下你已启用的模型；approval 绑定实际模型，且覆盖值不得与实现模型相同。目录条目不因覆盖而改变。
 | `offline/fake-implementer-v1` | 本地 fake | 实现 | 读/写文件 | free_tier | 否 |
 | `offline/fake-reviewer-v1` | 本地 fake | 只读评审 | 读文件 | free_tier | 否 |
 
