@@ -47,7 +47,6 @@ jobs:
         env:
           RELAY_TARGET: aarch64-apple-darwin
           RELAY_NO_EXEC: "1"
-          RELAY_MACOS_TARGET: arm64-apple-macosx13.0
         run: |
           version="${{ steps.version.outputs.version }}"
           out="$RUNNER_TEMP/dist"
