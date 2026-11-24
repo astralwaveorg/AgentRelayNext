@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+usage() {
+    printf '%s\n' 'Usage: scripts/check test <crate> [test-filter]' '       scripts/check full'
+}
+
+case "${1-}" in
+    -h|--help) usage; exit 0 ;;
+    test)
+        if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] || [ -z "$2" ]; then
+            usage >&2; exit 2
+        fi
+        ;;
+    full)
+        if [ "$#" -ne 1 ]; then
+            usage >&2; exit 2
+        fi
+        ;;
+    *) usage >&2; exit 2 ;;
+esac
+
+CDPATH='' cd "$(dirname "$0")/.."
+
+if [ "$1" = test ]; then
+    crate=$2
+    shift 2
+    case "${1-}" in
+        -*) usage >&2; exit 2 ;;
+    esac
+    exec cargo test --locked --offline -p "$crate" "$@"
+fi
+
+cargo fmt --all --check
+cargo clippy --workspace --locked --offline --all-targets -- -D warnings
+exec cargo test --workspace --locked --offline

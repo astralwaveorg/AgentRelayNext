@@ -1,0 +1,78 @@
+name: Release DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Verify candidate
+        run: ./scripts/check full
+
+      - name: Resolve version
+        id: version
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/relay-daemon/Cargo.toml)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            [ "$tag" = "$version" ] || {
+              echo "tag v$tag does not match Cargo version $version" >&2
+              exit 1
+            }
+            echo "tag=v$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build app, ZIP, and DMG
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          out="$RUNNER_TEMP/dist"
+          packaging/package.sh "$out"
+          app="$out/RelayTaskWindow.app"
+          packaging/release/build-dmg.sh "$app" "$out/RelayTaskWindow-$version.dmg"
+
+      - name: Generate SBOM and checksums
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          out="$RUNNER_TEMP/dist"
+          cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin \
+            --locked --offline | /usr/bin/python3 -I packaging/release/rust-sbom.py \
+            > "$out/AgentRelay-rust.spdx.json"
+          if [ -f "docs/release-notes-$version.md" ]; then
+            cp "docs/release-notes-$version.md" "$out/RELEASE_NOTES.md"
+          else
+            cp CHANGELOG.md "$out/RELEASE_NOTES.md"
+          fi
+          (cd "$out" && shasum -a 256 RelayTaskWindow-* AgentRelay-rust.spdx.json RELEASE_NOTES.md > SHA256SUMS)
+          ls -lah "$out"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Agent Relay ${{ steps.version.outputs.version }}
+          body_path: ${{ runner.temp }}/dist/RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg
+            ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg.sha256
+            ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg.manifest.json
+            ${{ runner.temp }}/dist/RelayTaskWindow-*.zip
+            ${{ runner.temp }}/dist/RelayTaskWindow-*.zip.sha256
+            ${{ runner.temp }}/dist/AgentRelay-rust.spdx.json
+            ${{ runner.temp }}/dist/SHA256SUMS
+            ${{ runner.temp }}/dist/RELEASE_NOTES.md

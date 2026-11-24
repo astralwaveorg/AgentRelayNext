@@ -1,0 +1,7 @@
+[package]
+name = "relay-core"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic task state machine and retry policy for Agent Relay"
+license = "MIT"
+publish = false

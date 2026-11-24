@@ -1,0 +1,12 @@
+[package]
+name = "relay-store"
+version = "0.1.0"
+edition = "2021"
+description = "SQLite persistence, idempotency, dispatch fences and stage runs for Agent Relay"
+license = "MIT"
+publish = false
+
+[dependencies]
+serde_json = "1"
+relay-core = { path = "../relay-core" }
+rusqlite = { version = "0.43.0", features = ["bundled"] }

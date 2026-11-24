@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible problem without secrets or private task data
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, keychain values, private repositories, task databases, or raw provider responses.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: 0.1.23 / build 20261124110124
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and hardware
+      placeholder: macOS 14.6, Apple Silicon
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a synthetic repository and redacted logs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: relayctl doctor/status output only; no secrets or full home directory.

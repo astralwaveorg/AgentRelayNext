@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Relay — one coding agent writes, another reviews</title>
+  <desc id="desc">Dark gradient banner with two agent cards and an evidence panel.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.55" stop-color="#0b1f3a"/>
+      <stop offset="1" stop-color="#10112b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#43d9ff"/>
+      <stop offset="1" stop-color="#8b7cff"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1040" cy="100" r="220" fill="#2a7fff" opacity="0.10"/>
+  <circle cx="120" cy="590" r="250" fill="#8b7cff" opacity="0.10"/>
+  <text x="80" y="128" fill="#79e8ff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="22" letter-spacing="5">LOCAL-FIRST MACOS</text>
+  <text x="78" y="222" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="76" font-weight="800">Agent Relay</text>
+  <text x="82" y="280" fill="#dbe8ff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="30">One coding agent writes. Another reviews.</text>
+  <text x="82" y="318" fill="#8fa7cd" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="22">You get the patch, test receipt, and review evidence.</text>
+
+  <g transform="translate(82,378)">
+    <rect width="300" height="150" rx="20" fill="#10284a" stroke="#2a5285"/>
+    <text x="24" y="42" fill="#79e8ff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16" letter-spacing="2">IMPLEMENT</text>
+    <text x="24" y="82" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="24" font-weight="700">Claude Code</text>
+    <text x="24" y="112" fill="#9db6dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">isolated Git worktree</text>
+    <text x="24" y="136" fill="#9db6dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">structured file edits</text>
+  </g>
+  <g transform="translate(450,378)">
+    <rect width="300" height="150" rx="20" fill="#10284a" stroke="#2a5285"/>
+    <text x="24" y="42" fill="#9fffd0" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16" letter-spacing="2">VERIFY</text>
+    <text x="24" y="82" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="24" font-weight="700">Local tests</text>
+    <text x="24" y="112" fill="#9db6dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">fixed argv, no shell</text>
+    <text x="24" y="136" fill="#9db6dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">byte-bound receipt</text>
+  </g>
+  <g transform="translate(818,378)">
+    <rect width="300" height="150" rx="20" fill="#10284a" stroke="#2a5285"/>
+    <text x="24" y="42" fill="#c9c0ff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="16" letter-spacing="2">REVIEW</text>
+    <text x="24" y="82" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="24" font-weight="700">OpenCode</text>
+    <text x="24" y="112" fill="#9db6dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">independent read-only model</text>
+    <text x="24" y="136" fill="#9db6dc" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="17">diff + receipt digests</text>
+  </g>
+  <path d="M382 453 H450" stroke="url(#accent)" stroke-width="3" stroke-linecap="round"/>
+  <path d="M750 453 H818" stroke="url(#accent)" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="87" cy="160" r="6" fill="#43d9ff" filter="url(#glow)"/>
+</svg>

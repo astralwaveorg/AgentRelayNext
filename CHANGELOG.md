@@ -1,0 +1,114 @@
+# Changelog
+
+所有用户可见变化记录在此。产品版本以 `crates/relay-daemon/Cargo.toml` 为准；里程碑
+（M1/M2/M2.5/M3）不是版本号。
+
+## 0.1.23 — 2026-11-24
+
+### Added
+
+- 90-day audit metadata cleanup in `maintenance prune` (`--metadata-days`, default 90).
+- Startup wrapper for automatic 5 MiB x 5 log rotation on service start/restart.
+- Versioned built-in model catalog and deterministic role recommendation
+  (`relayctl catalog list|recommend`), with alias independence checks.
+- More modern task-window header, status badges, stage timeline and menu-bar panel.
+- Unsigned DMG build/verify scripts and complete GitHub release notes.
+
+### Fixed
+
+- Upgrade migrates the LaunchAgent to the stable log-rotating wrapper while keeping
+  rollback compatibility.
+
+## 0.1.22 — 2026-11-24
+
+### Added
+
+- MIT license and crate metadata.
+- Unsigned local DMG build/verify scripts for GitHub/self-hosted distribution.
+- Modern task-window header, status badges, stage timeline, richer menu-bar panel,
+  and clearer sidebar/detail cards.
+
+### Changed
+
+- GitHub release instructions explicitly require manual first-launch approval because
+  the project has no Apple Developer ID/notarization.
+## 0.1.21 — 2026-11-24
+
+### License
+
+- Project license selected as MIT; crate metadata updated.
+
+### Added
+
+- Non-terminal task queue cap of 20, with idempotent replay still allowed.
+- 2 GiB managed artifact/worktree quota sampled before new claims; running work may finish.
+- `relayctl maintenance prune` preview/apply for expired terminal worktrees/artifacts and
+  expired unused plans; task/event audit rows are retained.
+- `relayctl maintenance rotate-logs` with 5 MiB x 5 retention for stopped instances.
+- StageRun timeline in task detail; accessibility labels for diff, receipt, handoff and
+  acceptance controls.
+
+### Fixed
+
+- Task-window detail now reads all artifact pages up to 256 KiB instead of truncating at
+  the default slice.
+- Explicitly unlock the instance flock before dropping the daemon handle; reduces
+  same-process restart flakiness.
+- Registry/run-time docs and candidate evidence updated for 0.1.21.
+
+## 0.1.20 — 2026-11-24
+
+### Fixed
+
+- Retry now requires the new plan to keep the original write scope, verification rule
+  set and execution profile, not only project/goal/base/brief.
+- MCP business failures now return a structured `error` object with `isError: true`
+  instead of text-only errors.
+- The task window keeps the last known overview across transient daemon failures,
+  auto-selects a valid task, and distinguishes inactive/failed/maintenance/archive.
+- Task detail can load the test receipt and handoff in addition to the diff.
+- Live-route workflow summaries no longer label real provider runs as offline adapters.
+- Managed edit input is capped below the live route's 64 KiB stage-input limit so a
+  preview cannot succeed and fail only after the worker starts.
+- Default disk guard stops new claims below 512 MiB free on the managed volume.
+
+### Added
+
+- Read-only `Store::open_read_only` for diagnostics; `relay_status` now exposes
+  outer revision/attempt and a stable `next_action`.
+- Review notes are persisted as `review_note` audit events.
+- README, architecture, contributing, security, support, changelog and open-source
+  readiness documentation.
+
+### Changed
+
+- README, architecture, contributing, security, support and open-source readiness
+  documentation expanded.
+- Crate descriptions now describe product responsibilities rather than internal
+  work-package names.
+- Preview plans expire after 15 minutes (03 default) instead of one hour.
+
+## 0.1.19 — 2026-11-24
+
+- Installed as a local preview; added retry scope/rule/profile enforcement, structured
+  MCP business errors, task-window transient-state retention, receipt/handoff paging,
+  live-route summary labeling and an upgrade bootout/snapshot race fix.
+- Upgraded in place from 0.1.18 with a verified 2-task/28-event/2-artifact snapshot.
+
+## 0.1.18 — 2026-11-24
+
+- Local preview installed at `~/Applications/RelayTaskWindow.app`.
+- Fixed SIGTERM/SIGINT foreground cleanup for active offline process groups.
+- Real-route preview/serve, StageRun persistence, project registration and task window
+  acceptance are present.
+- Full candidate check: 225 tests passed, 0 failed.
+
+## 0.1.7 — 2026-11-24
+
+- App icon, macOS 26 liquid-glass status card (material fallback), menu bar entry and
+  foreground “任务” menu.
+
+## 0.1.0 — 2026-11-23
+
+- First local preview: offline demo, two local adapters, implementation → verification
+  → independent review, one automatic rework, manual acceptance.

@@ -1,0 +1,13 @@
+/target/
+/dist/
+*.log
+*.log.*
+.DS_Store
+.agent-relay-next/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.cer
+*.mobileprovision

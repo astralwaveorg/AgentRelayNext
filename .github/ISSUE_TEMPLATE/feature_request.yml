@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a focused improvement to the local handoff workflow
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What manual step or failure are you trying to remove?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Keep the local-first, no-auto-merge boundary.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and risks
+      description: Mention permissions, data sharing, billing, or recovery impact.

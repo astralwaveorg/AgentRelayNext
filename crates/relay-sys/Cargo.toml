@@ -1,0 +1,10 @@
+[package]
+name = "relay-sys"
+version = "0.1.0"
+edition = "2021"
+description = "Thin macOS process, socket and filesystem primitives for Agent Relay"
+license = "MIT"
+publish = false
+
+[dependencies]
+libc = "0.2"

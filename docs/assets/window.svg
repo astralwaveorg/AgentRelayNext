@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Relay task window preview</title>
+  <desc id="desc">Synthetic preview of the macOS task window with sidebar, stage timeline, review card and diff.</desc>
+  <defs>
+    <linearGradient id="appbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#eef4ff"/>
+    </linearGradient>
+    <linearGradient id="logo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#43d9ff"/><stop offset="0.55" stop-color="#2a7fff"/><stop offset="1" stop-color="#6b5cff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#1d3557" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="760" fill="#dfe8f6"/>
+  <g filter="url(#shadow)">
+    <rect x="40" y="30" width="1120" height="700" rx="22" fill="url(#appbg)" stroke="#cfdcf0"/>
+    <rect x="40" y="30" width="1120" height="122" rx="22" fill="#f7faff"/>
+    <rect x="40" y="126" width="1120" height="26" fill="#f7faff"/>
+    <rect x="76" y="62" width="46" height="46" rx="12" fill="url(#logo)"/>
+    <path d="M89 86 L99 78 L109 86 M89 101 L99 93 L109 101" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="140" y="86" fill="#15233b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="24" font-weight="800">Agent Relay</text>
+    <rect x="298" y="67" width="74" height="24" rx="12" fill="#e6f0ff"/>
+    <text x="310" y="84" fill="#2a64b8" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12" font-weight="700">PREVIEW</text>
+    <text x="140" y="108" fill="#7b8ca8" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13">One agent writes · another reviews · you get the evidence</text>
+    <rect x="852" y="70" width="124" height="36" rx="10" fill="#eef3fb" stroke="#d8e3f4"/>
+    <text x="872" y="93" fill="#425675" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13">Project ▾</text>
+    <rect x="988" y="70" width="132" height="36" rx="10" fill="#2a7fff"/>
+    <text x="1010" y="93" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13">New task…</text>
+    <rect x="72" y="132" width="1056" height="42" rx="12" fill="#eef6ff"/>
+    <circle cx="92" cy="153" r="5" fill="#0aa77a"/>
+    <text x="106" y="158" fill="#2c4a70" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13" font-weight="600">Service ready</text>
+    <text x="1048" y="158" fill="#7b8ca8" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12">v0.1.23</text>
+
+    <rect x="72" y="194" width="286" height="510" rx="16" fill="#f7faff" stroke="#e0e8f5"/>
+    <text x="94" y="224" fill="#8b9ab2" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="11" letter-spacing="2">TASKS</text>
+    <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
+      <rect x="86" y="240" width="258" height="76" rx="12" fill="#e8f2ff"/>
+      <circle cx="106" cy="264" r="5" fill="#2a7fff"/>
+      <text x="120" y="269" fill="#15233b" font-size="13" font-weight="700">Synthetic count fix</text>
+      <rect x="120" y="283" width="76" height="20" rx="10" fill="#dcecff"/>
+      <text x="130" y="297" fill="#2a64b8" font-size="10" font-weight="700">IN REVIEW</text>
+      <text x="206" y="297" fill="#8b9ab2" font-size="10">3/3 stages</text>
+
+      <rect x="86" y="328" width="258" height="70" rx="12" fill="#ffffff" stroke="#e5ecf7"/>
+      <circle cx="106" cy="352" r="5" fill="#0aa77a"/>
+      <text x="120" y="357" fill="#15233b" font-size="13" font-weight="600">Offline rework demo</text>
+      <text x="120" y="378" fill="#8b9ab2" font-size="10">COMPLETED · 6 stages</text>
+
+      <rect x="86" y="410" width="258" height="70" rx="12" fill="#ffffff" stroke="#e5ecf7"/>
+      <circle cx="106" cy="434" r="5" fill="#8b9ab2"/>
+      <text x="120" y="439" fill="#15233b" font-size="13" font-weight="600">Project registration</text>
+      <text x="120" y="460" fill="#8b9ab2" font-size="10">COMPLETED · entry only</text>
+    </g>
+
+    <text x="386" y="226" fill="#15233b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="24" font-weight="800">Synthetic count fix</text>
+    <rect x="1030" y="202" width="76" height="28" rx="14" fill="#e8f2ff"/>
+    <text x="1046" y="221" fill="#2a64b8" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="11" font-weight="700">IN REVIEW</text>
+    <text x="386" y="250" fill="#8b9ab2" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12">proj_demo · revision 7 · attempt 1 · today</text>
+
+    <rect x="386" y="270" width="720" height="150" rx="16" fill="#ffffff" stroke="#e0e8f5"/>
+    <text x="408" y="300" fill="#15233b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="700">Stage timeline</text>
+    <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12">
+      <circle cx="414" cy="334" r="5" fill="#0aa77a"/><text x="428" y="338" fill="#425675">1 · Implement</text><text x="560" y="338" fill="#8b9ab2">succeeded</text>
+      <circle cx="414" cy="362" r="5" fill="#0aa77a"/><text x="428" y="366" fill="#425675">1 · Verify</text><text x="560" y="366" fill="#8b9ab2">succeeded</text>
+      <circle cx="414" cy="390" r="5" fill="#6b5cff"/><text x="428" y="394" fill="#425675">1 · Review</text><text x="560" y="394" fill="#8b9ab2">passed · independent</text>
+    </g>
+
+    <rect x="386" y="438" width="720" height="118" rx="16" fill="#f7faff" stroke="#e0e8f5"/>
+    <text x="408" y="468" fill="#15233b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="700">Independent review</text>
+    <text x="408" y="494" fill="#536582" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12">Patch and receipt digests match the candidate.</text>
+    <rect x="408" y="510" width="130" height="24" rx="12" fill="#e6fbf4"/>
+    <text x="424" y="526" fill="#087a5b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="11" font-weight="700">PASS</text>
+    <text x="552" y="526" fill="#536582" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="11">0 reworks · Claude Code → OpenCode</text>
+
+    <rect x="386" y="574" width="720" height="130" rx="16" fill="#0f1b2d"/>
+    <text x="408" y="604" fill="#79e8ff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12" letter-spacing="2">PATCH</text>
+    <text x="408" y="632" fill="#dbe8ff" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">diff --git a/src/count.rs b/src/count.rs</text>
+    <text x="408" y="654" fill="#9fffd0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">+ pub fn count(v: &amp;[u8]) -&gt; usize { v.len() }</text>
+    <text x="408" y="676" fill="#b9c9e5" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12">--- a/src/count.rs</text>
+    <rect x="984" y="636" width="100" height="34" rx="10" fill="#2a7fff"/>
+    <text x="1006" y="658" fill="#fff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12" font-weight="700">Accept…</text>
+  </g>
+</svg>
