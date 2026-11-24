@@ -29,7 +29,12 @@ fn temp_root(name: &str) -> PathBuf {
         .as_nanos();
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
+    let base = if Path::new("/private/tmp").is_dir() {
+        std::path::PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    let dir = base.join(format!(
         "m1e-{name}-{}{seq}{}",
         std::process::id(),
         nanos % 1_000_000

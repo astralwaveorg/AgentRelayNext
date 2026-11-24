@@ -29,7 +29,12 @@ fn temp_root(name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     // 短名：真实 daemon 的 socket 路径受 macOS sun_path 限制。
-    let dir = std::env::temp_dir().join(format!(
+    let base = if Path::new("/private/tmp").is_dir() {
+        std::path::PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    let dir = base.join(format!(
         "aw{}{seq}{}",
         std::process::id(),
         nanos % 1_000_000
