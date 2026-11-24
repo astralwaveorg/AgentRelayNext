@@ -174,17 +174,32 @@ pub fn verify_baseline(
         });
     }
     // 3. 保守拒绝本版无法安全确认的仓库能力。
-    if git_query(repo_root, &["config", "--get", "extensions.partialclone"])?.is_some() {
+    if git_query(
+        repo_root,
+        &["config", "--local", "--get", "extensions.partialclone"],
+    )?
+    .is_some()
+    {
         return Err(GitCheckError::UnsafeRepository {
             reason: "partial clone（对象可能缺失且依赖联网补齐）".into(),
         });
     }
-    if git_query(repo_root, &["config", "--get-regexp", r"^submodule\."])?.is_some() {
+    if git_query(
+        repo_root,
+        &["config", "--local", "--get-regexp", r"^submodule\."],
+    )?
+    .is_some()
+    {
         return Err(GitCheckError::UnsafeRepository {
             reason: "配置了 submodule".into(),
         });
     }
-    if git_query(repo_root, &["config", "--get-regexp", r"^filter\."])?.is_some() {
+    if git_query(
+        repo_root,
+        &["config", "--local", "--get-regexp", r"^filter\."],
+    )?
+    .is_some()
+    {
         return Err(GitCheckError::UnsafeRepository {
             reason: "配置了自定义过滤器（如 LFS）".into(),
         });
