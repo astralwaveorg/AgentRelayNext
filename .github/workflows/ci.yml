@@ -17,13 +17,19 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: aarch64-apple-darwin
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Full Rust checks
-        run: ./scripts/check full
+        run: |
+          set -o pipefail
+          ./scripts/check full 2>&1 | tee "$RUNNER_TEMP/check.log"
+      - name: Show failure summary
+        if: failure()
+        run: |
+          echo "::error title=check-full-failure::$(tail -80 "$RUNNER_TEMP/check.log" 2>/dev/null | tr '\n' ' ')"
       - name: Cross-build arm64 relayctl
         run: cargo build --release --locked --offline --target aarch64-apple-darwin -p relay-daemon --bin relayctl
       - name: Compile SwiftUI app
