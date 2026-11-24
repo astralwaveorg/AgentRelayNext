@@ -5,7 +5,7 @@ set -euo pipefail
 APP="$1"; VERSION="$2"; BUILD="$3"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -parse-as-library -target "arm64-apple-macosx14.0" \
+swiftc -O -swift-version 5 -parse-as-library -target "${RELAY_MACOS_TARGET:-arm64-apple-macosx14.0}" \
   -o "$APP/Contents/MacOS/RelayTaskWindow" "$ROOT/ui/RelayTaskWindow/RelayTaskWindow.swift"
 icon_tmp="$(mktemp -d /private/tmp/relay-icon.XXXXXX)"
 trap 'rm -rf "$icon_tmp"' EXIT

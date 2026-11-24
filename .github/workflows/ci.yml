@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: macos-13
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -23,6 +23,8 @@ jobs:
       - name: Cross-build arm64 relayctl
         run: cargo build --release --locked --offline --target aarch64-apple-darwin -p relay-daemon --bin relayctl
       - name: Compile SwiftUI app
+        env:
+          RELAY_MACOS_TARGET: arm64-apple-macosx13.0
         run: |
           version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/relay-daemon/Cargo.toml)"
           packaging/build-app.sh "$RUNNER_TEMP/RelayTaskWindow.app" "$version" ci
