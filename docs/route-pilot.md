@@ -19,11 +19,11 @@ opencode=/opt/homebrew/bin/opencode
 "$relayctl" route-pilot review-offline-check "$opencode"
 ```
 
-`preview` 的 approval 绑定预览内容和实际 CLI 文件摘要。只有在账户所有者确认 M Plan 专用密钥、额度和这次样本后才可真实调用。根据 [MiniMax M Plan 说明](https://platform.minimax.io/docs/m-plan/quickstart.md)，套餐不足或模型未包含时可能扣 Credits；如不接受，停在离线步骤。本命令无法在请求前证明最终归属。如账户所有者已经通过钥匙串访问界面用指定名称单独保存专用密钥，可用下列方式调用。在命令里只替换非秘密的 `<approval>`，不要将密钥贴到命令、聊天或日志里：
+`preview` 的 approval 绑定预览内容和实际 CLI 文件摘要。只有在账户所有者确认 M Plan 专用密钥、额度和这次样本后才可真实调用。根据 [MiniMax M Plan 说明](https://platform.minimax.io/docs/m-plan/quickstart.md)，套餐不足或模型未包含时可能扣 Credits；如不接受，停在离线步骤。本命令无法在请求前证明最终归属。如账户所有者已在 shell 环境中导出专用密钥（例如写入 `~/.zshrc`，变量名 `MINIMAX_API_KEY`），可用下列方式调用。在命令里只替换非秘密的 `<approval>`，不要把密钥贴到命令参数、聊天或日志里：
 
 ```sh
 set -o pipefail
-/usr/bin/security find-generic-password -w -s 'AgentRelay MiniMax M Plan pilot' |
+printf '%s\n' "$MINIMAX_API_KEY" |
   "$relayctl" route-pilot run "$claude" --approve '<approval>' --allow-plan-credits
 ```
 
@@ -40,14 +40,14 @@ cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go
 cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go-offline-check /opt/homebrew/bin/opencode
 ```
 
-账户所有者可在 OpenCode Console 的 Go 页面确认 **Extra Usage 已关闭**。已经将该订阅工作区的 Console API key 单独保存到钥匙串时，可先查询三档额度；该步骤不发模型请求。真实样本只发送内置评审小题，最多一次请求、512 个输出 tokens、不开启工具。只有实际模型、正常终态、样本结果、套餐计费来源和零余额扣费都能验证时才通过。
+账户所有者可在 OpenCode Console 的 Go 页面确认 **Extra Usage 已关闭**。已经将该订阅工作区的 Console API key 导出为环境变量 `OC_API_KEY` 时，可先查询三档额度；该步骤不发模型请求。真实样本只发送内置评审小题，最多一次请求、512 个输出 tokens、不开启工具。只有实际模型、正常终态、样本结果、套餐计费来源和零余额扣费都能验证时才通过。
 
 ```sh
 set -o pipefail
-/usr/bin/security find-generic-password -w -s 'AgentRelay OpenCode Go pilot' |
+printf '%s\n' "$OC_API_KEY" |
   cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go-quota /opt/homebrew/bin/opencode
 
-/usr/bin/security find-generic-password -w -s 'AgentRelay OpenCode Go pilot' |
+printf '%s\n' "$OC_API_KEY" |
   cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go-run /opt/homebrew/bin/opencode --approve '<go-approval>' --extra-usage-off
 ```
 
@@ -68,7 +68,7 @@ claude="$HOME/.local/bin/claude"
 
 ```sh
 set -o pipefail
-/usr/bin/security find-generic-password -w -s 'AgentRelay MiniMax M Plan pilot' |
+printf '%s\n' "$MINIMAX_API_KEY" |
   "$relayctl" route-pilot edit-run "$claude" --approve '<edit-approval>' --allow-plan-credits
 ```
 
@@ -86,13 +86,13 @@ opencode=/opt/homebrew/bin/opencode
 "$relayctl" route-pilot pair-offline-check "$claude" "$opencode"
 ```
 
-真实模式需要两种账户条件都满足：已接受 MiniMax M Plan 样本可能使用 Credits，且已在 OpenCode Go 控制台确认 Extra Usage 关闭。已将对应密钥按本文指定名称存入钥匙串时，可以用同一个命令顺序完成两段验收，不回传密钥或项目资料：
+真实模式需要两种账户条件都满足：已接受 MiniMax M Plan 样本可能使用 Credits，且已在 OpenCode Go 控制台确认 Extra Usage 关闭。已将两把专用密钥导出为环境变量 `MINIMAX_API_KEY` 与 `OC_API_KEY` 时，可以用同一个命令顺序完成两段验收，不回传密钥或项目资料：
 
 ```sh
 set -o pipefail
 {
-  /usr/bin/security find-generic-password -w -s 'AgentRelay MiniMax M Plan pilot' &&
-  /usr/bin/security find-generic-password -w -s 'AgentRelay OpenCode Go pilot'
+  printf '%s\n' "$MINIMAX_API_KEY" &&
+  printf '%s\n' "$OC_API_KEY"
 } | "$relayctl" route-pilot pair-run "$claude" "$opencode" \
   --approve '<pair-approval>' --allow-plan-credits --extra-usage-off
 ```

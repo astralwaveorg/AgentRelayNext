@@ -35,12 +35,12 @@
 
     relayctl project-setup route-preview <项目ID> <claude绝对路径> <opencode绝对路径>
 
-返回的 approval 只适用于这个项目、允许写入的范围、验证规则和两份实际 CLI 二进制。只有确认 MiniMax 可用 M Plan Credits、OpenCode Go 的 Extra Usage 已关闭，并准备了两份专用密钥时，才启用：
+返回的 approval 只适用于这个项目、允许写入的范围、验证规则和两份实际 CLI 二进制。只有确认 MiniMax 可用 M Plan Credits、OpenCode Go 的 Extra Usage 已关闭，并在 shell 中导出两份专用密钥（`MINIMAX_API_KEY`、`OC_API_KEY`，例如写入 `~/.zshrc`）时，才启用：
 
     set -o pipefail
     {
-      /usr/bin/security find-generic-password -w -s 'AgentRelay MiniMax M Plan pilot' &&
-      /usr/bin/security find-generic-password -w -s 'AgentRelay OpenCode Go pilot'
+      printf '%s\n' "$MINIMAX_API_KEY" &&
+      printf '%s\n' "$OC_API_KEY"
     } | relayctl project-setup serve-live <项目ID> <claude绝对路径> <opencode绝对路径> \
         --approve <approval> --allow-plan-credits --extra-usage-off
 
@@ -63,13 +63,13 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 python3 packaging/qa/live-project-acceptance.py prepare   "$relayctl" "$HOME/.local/bin/claude" /opt/homebrew/bin/opencode
 ```
 
-记录输出中的 `directory` 和 `approval`。只有已核对下列计费选项、预览内容和专用密钥后，才运行：
+记录输出中的 `directory` 和 `approval`。只有已核对下列计费选项与预览内容，并已在 shell 中导出 `MINIMAX_API_KEY` / `OC_API_KEY` 后，才运行：
 
 ```sh
 set -o pipefail
 {
-  /usr/bin/security find-generic-password -w -s 'AgentRelay MiniMax M Plan pilot' &&
-  /usr/bin/security find-generic-password -w -s 'AgentRelay OpenCode Go pilot'
+  printf '%s\n' "$MINIMAX_API_KEY" &&
+  printf '%s\n' "$OC_API_KEY"
 } | python3 packaging/qa/live-project-acceptance.py run '<directory>'   --approve '<approval>' --allow-plan-credits --extra-usage-off
 ```
 
