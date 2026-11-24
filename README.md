@@ -75,7 +75,7 @@ Download `RelayTaskWindow-0.1.24.dmg` from the [latest GitHub Release](https://g
 shasum -a 256 RelayTaskWindow-0.1.24.dmg
 ```
 
-The expected SHA-256 is listed in the release notes. The DMG is unsigned and not notarized:
+The expected SHA-256 is in the attached `.sha256` file or `SHA256SUMS`. The DMG is unsigned and not notarized:
 on first launch, Control-click the app and choose **Open**, or allow it in
 **System Settings → Privacy & Security**. Do not disable Gatekeeper globally.
 

@@ -8,10 +8,9 @@
 ## 下载
 
 - `RelayTaskWindow-0.1.24.dmg`
-- SHA-256：`0fe6882a729a5acea1321fe150096744993e2df04ef35e5fcc8f063fa8fc8a00`
-- 备用 ZIP：`RelayTaskWindow-0.1.24-20261124130402.zip`，SHA-256
-  `6a48bce9f71ff737cc94e5c3945086f8a4419fd4267cb9f72fce565e3f22b20c`
-- 构建：product `0.1.24`，build `20261124130402`，业务 `relay.v1`，wire `1`，schema `9`
+- 校验：下载同目录的 `RelayTaskWindow-0.1.24.dmg.sha256`，或使用 Release 附件中的
+  `SHA256SUMS`；构建号见 `.dmg.manifest.json` 和 `RelayTaskWindow-*.zip` 文件名。
+- 构建：product `0.1.24`，业务 `relay.v1`，wire `1`，schema `9`
 
 ## 本版内容
 

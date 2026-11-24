@@ -69,7 +69,7 @@ OpenCode Go + GLM-5.3-Flash  ── 只读评审补丁 + 收据
 shasum -a 256 RelayTaskWindow-0.1.24.dmg
 ```
 
-预期 SHA-256 写在 Release notes 中。DMG 未签名、未公证：首次启动请按住 Control 点击
+预期 SHA-256 见附件 `.sha256` 或 `SHA256SUMS`。DMG 未签名、未公证：首次启动请按住 Control 点击
 App 选择“打开”，或到“系统设置 → 隐私与安全性”放行。不要全局关闭 Gatekeeper。
 
 ### 2. 安装
