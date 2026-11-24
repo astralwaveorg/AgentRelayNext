@@ -77,10 +77,11 @@ jobs:
           draft: false
           prerelease: false
           overwrite_files: false
+          fail_on_unmatched_files: true
           files: |
             ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg
             ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg.sha256
-            ${{ runner.temp }}/dist/RelayTaskWindow-*.dmg.manifest.json
+            ${{ runner.temp }}/dist/RelayTaskWindow-*.manifest.json
             ${{ runner.temp }}/dist/RelayTaskWindow-*.zip
             ${{ runner.temp }}/dist/RelayTaskWindow-*.zip.sha256
             ${{ runner.temp }}/dist/AgentRelay-rust.spdx.json
