@@ -78,4 +78,6 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 
 0.1.22 优化任务窗口视觉：渐变应用标识、状态胶囊、卡片化服务栏、阶段时间线、更清晰的侧栏和菜单栏浮层；新增 `packaging/release/build-dmg.sh` 与 `verify-dmg-local.sh`，支持无 Apple 开发者账号的未签名 DMG 发布与校验。许可证选择 MIT。未签名 DMG 首次启动仍需手动放行，不能称为 Gatekeeper 通过。
 
-0.1.23 增加 90 天审计元数据清理、启动包装脚本自动日志轮转、版本化模型目录/确定性推荐和更现代的窗口/菜单栏外观；许可证 MIT。未签名 DMG 0.1.23 已构建并通过挂载/SHA/版本校验。全工作区 233 项测试通过。
+0.1.23 增加 90 天审计元数据清理、启动包装脚本自动日志轮转、版本化模型目录/确定性推荐和更现代的窗口/菜单栏外观；许可证 MIT。
+
+0.1.24 修复基线检查误读全局 Git LFS filter，调整测试临时路径以适配 macOS SUN_LEN，并完成 GitHub Actions 的 macOS 26 arm64 构建链。未签名 DMG 0.1.24 已构建并通过挂载/SHA/版本校验；全工作区 233 项测试通过。

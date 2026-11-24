@@ -1,4 +1,4 @@
-# Agent Relay 0.1.23 — 本机开发预览
+# Agent Relay 0.1.24 — 本机开发预览
 
 **One coding agent writes. Another reviews. You get the evidence.**
 
@@ -7,11 +7,11 @@
 
 ## 下载
 
-- `RelayTaskWindow-0.1.23.dmg`
-- SHA-256：`238e8fc4d5708e8de26d33061f83e29086f23c0248f38d5d201e0d1b0d86f54e`
-- 备用 ZIP：`RelayTaskWindow-0.1.23-20261124110124.zip`，SHA-256
-  `ee96b18fc3b8f731e5558300cdfbebf38eaf5042bd6d0c1e4e037c76b8da9ee6`
-- 构建：product `0.1.23`，build `20261124110124`，业务 `relay.v1`，wire `1`，schema `9`
+- `RelayTaskWindow-0.1.24.dmg`
+- SHA-256：`0fe6882a729a5acea1321fe150096744993e2df04ef35e5fcc8f063fa8fc8a00`
+- 备用 ZIP：`RelayTaskWindow-0.1.24-20261124130402.zip`，SHA-256
+  `6a48bce9f71ff737cc94e5c3945086f8a4419fd4267cb9f72fce565e3f22b20c`
+- 构建：product `0.1.24`，build `20261124130402`，业务 `relay.v1`，wire `1`，schema `9`
 
 ## 本版内容
 
@@ -23,13 +23,14 @@
 - 版本化模型目录和确定性角色推荐（`relayctl catalog list|recommend`）。
 - 任务详情 StageRun 时间线；更现代的窗口/菜单栏外观和可访问性标签。
 - MIT License。
+- 基线检查只读取仓库本地 Git 配置，不再被全局 Git LFS filter 误拦。
 
 ## 安装
 
 1. 核对下载摘要：
 
    ```sh
-   shasum -a 256 RelayTaskWindow-0.1.23.dmg
+   shasum -a 256 RelayTaskWindow-0.1.24.dmg
    ```
 
 2. 打开 DMG，把 `RelayTaskWindow.app` 拖到 `Applications`。

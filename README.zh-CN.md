@@ -8,7 +8,7 @@
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20Apple%20Silicon-111827.svg)](#环境要求)
 [![Built with Rust + SwiftUI](https://img.shields.io/badge/built%20with-Rust%20%2B%20SwiftUI-f97316.svg)](#架构)
 [![CI](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml/badge.svg)](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-0.1.23-2a7fff.svg)](docs/release-notes-0.1.23.md)
+[![Release](https://img.shields.io/badge/release-0.1.24-2a7fff.svg)](docs/release-notes-0.1.24.md)
 
 <img src="docs/assets/hero.svg" alt="Agent Relay：两个 AI 编码工具的本地交付流程" width="100%">
 
@@ -63,10 +63,10 @@ OpenCode Go + GLM-5.3-Flash  ── 只读评审补丁 + 收据
 
 ### 1. 下载 DMG
 
-从 [最新 GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) 下载 `RelayTaskWindow-0.1.23.dmg`，核对摘要：
+从 [最新 GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) 下载 `RelayTaskWindow-0.1.24.dmg`，核对摘要：
 
 ```sh
-shasum -a 256 RelayTaskWindow-0.1.23.dmg
+shasum -a 256 RelayTaskWindow-0.1.24.dmg
 ```
 
 预期 SHA-256 写在 Release notes 中。DMG 未签名、未公证：首次启动请按住 Control 点击
@@ -151,7 +151,7 @@ packaging/package.sh "$PWD/dist"
 ```sh
 packaging/release/build-dmg.sh \
   "$PWD/dist/RelayTaskWindow.app" \
-  "$PWD/dist/RelayTaskWindow-0.1.23.dmg"
+  "$PWD/dist/RelayTaskWindow-0.1.24.dmg"
 ```
 
 ## 数据、隐私和计费
@@ -169,7 +169,7 @@ packaging/release/build-dmg.sh \
 ## 状态与范围
 
 这是**开源开发预览**，不是签名生产版。因为没有 Apple 开发者身份，DMG 未签名、未公证。
-已知门禁见[发布说明](docs/release-notes-0.1.23.md)和[开源准备清单](docs/open-source-readiness.md)。
+已知门禁见[发布说明](docs/release-notes-0.1.24.md)和[开源准备清单](docs/open-source-readiness.md)。
 
 已实现：离线演示、固定真实路线预览/启动、StageRun 持久化、受管 worktree、验证收据、
 独立评审、人工验收、队列/配额/清理、模型目录、双语 UI 和未签名 DMG 构建。
@@ -186,7 +186,7 @@ packaging/release/build-dmg.sh \
 - [模型目录](docs/model-catalog.md)
 - [生产包准备](docs/production-package.md)
 - [GitHub 未签名 DMG 发布](docs/github-release.md)
-- [0.1.23 发布说明](docs/release-notes-0.1.23.md)
+- [0.1.24 发布说明](docs/release-notes-0.1.24.md)
 - [开源准备清单](docs/open-source-readiness.md)
 
 ## 开发

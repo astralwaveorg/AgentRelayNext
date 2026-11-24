@@ -18,7 +18,7 @@
   expectations. The current project has no Apple Developer ID.
 - [GitHub unsigned DMG](github-release.md): build, verify, and publish a local DMG without an
   Apple developer account.
-- [Release notes 0.1.23](release-notes-0.1.23.md): current download, changes, and limitations.
+- [Release notes 0.1.24](release-notes-0.1.24.md): current download, changes, and limitations.
 
 ## Product reference
 

@@ -17,16 +17,16 @@
 
 - [x] `cargo fmt --all --check`
 - [x] `cargo clippy --workspace --all-targets --locked -- -D warnings`
-- [x] `cargo test --workspace --locked --offline`（0.1.23 候选 233 项通过）
+- [x] `cargo test --workspace --locked --offline`（0.1.24 候选 233 项通过）
 - [x] SwiftUI 任务窗口可编译；重建二进制与安装包一致
-- [x] 0.1.23 全工作区验收批（完成本轮修复后执行）
+- [x] 0.1.24 全工作区验收批（完成本轮修复后执行）
 - [x] 无 `unsafe`：除 `relay-sys` 的集中平台原语外，crate 使用 `#![forbid(unsafe_code)]`
 - [x] 文档索引标注历史；`production-package` 的当前版本已更新
-- [ ] 统一各 crate 的版本策略（当前 daemon 0.1.23，其他 crate 0.1.0）
+- [ ] 统一各 crate 的版本策略（当前 daemon 0.1.24，其他 crate 0.1.0）
 
 ## 依赖与资产
 
-- [x] 生成 Cargo 依赖 SBOM（0.1.23 `AgentRelay-rust.spdx.json`）；资源/系统依赖仍需人工审查
+- [x] 生成 Cargo 依赖 SBOM（0.1.24 `AgentRelay-rust.spdx.json`）；资源/系统依赖仍需人工审查
 - [ ] 核对 bundled SQLite、Swift 工具链、图标、脚本和第三方许可证原文
 - [ ] 确认不把 Claude Code、OpenCode 或其他上游 CLI 打进包
 - [ ] 记录 Rust/Xcode/SDK 固定版本和构建来源

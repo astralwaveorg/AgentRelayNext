@@ -12,7 +12,7 @@ cd AgentRelayNext
 rm -rf /private/tmp/relay-release && packaging/package.sh /private/tmp/relay-release
 packaging/release/build-dmg.sh \
   /private/tmp/relay-release/RelayTaskWindow.app \
-  /private/tmp/relay-release/RelayTaskWindow-0.1.23.dmg
+  /private/tmp/relay-release/RelayTaskWindow-0.1.24.dmg
 ```
 
 `build-dmg.sh` 会在 DMG 内放 App、`Applications` 链接和简短说明，重新挂载校验版本，

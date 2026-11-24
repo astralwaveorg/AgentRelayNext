@@ -8,7 +8,7 @@
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20Apple%20Silicon-111827.svg)](#requirements)
 [![Built with Rust + SwiftUI](https://img.shields.io/badge/built%20with-Rust%20%2B%20SwiftUI-f97316.svg)](#architecture)
 [![CI](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml/badge.svg)](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-0.1.23-2a7fff.svg)](docs/release-notes-0.1.23.md)
+[![Release](https://img.shields.io/badge/release-0.1.24-2a7fff.svg)](docs/release-notes-0.1.24.md)
 
 <img src="docs/assets/hero.svg" alt="Agent Relay — local-first macOS handoff between two coding agents" width="100%">
 
@@ -69,10 +69,10 @@ The offline demo uses two local fake adapters and needs no account or network.
 
 ### 1. Download the DMG
 
-Download `RelayTaskWindow-0.1.23.dmg` from the [latest GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) and verify it:
+Download `RelayTaskWindow-0.1.24.dmg` from the [latest GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) and verify it:
 
 ```sh
-shasum -a 256 RelayTaskWindow-0.1.23.dmg
+shasum -a 256 RelayTaskWindow-0.1.24.dmg
 ```
 
 The expected SHA-256 is listed in the release notes. The DMG is unsigned and not notarized:
@@ -160,7 +160,7 @@ For a local DMG:
 ```sh
 packaging/release/build-dmg.sh \
   "$PWD/dist/RelayTaskWindow.app" \
-  "$PWD/dist/RelayTaskWindow-0.1.23.dmg"
+  "$PWD/dist/RelayTaskWindow-0.1.24.dmg"
 ```
 
 ## Data, privacy, and billing
@@ -181,7 +181,7 @@ See [Security](SECURITY.md) and [Route pilot](docs/route-pilot.md).
 
 This repository is an **open-source developer preview**, not a signed production release.
 The DMG is unsigned because the project has no Apple Developer ID/notarization identity.
-Known gates are tracked in [Release notes](docs/release-notes-0.1.23.md) and
+Known gates are tracked in [Release notes](docs/release-notes-0.1.24.md) and
 [Open-source readiness](docs/open-source-readiness.md).
 
 Implemented: offline demo, fixed real-route preview/serve, StageRun persistence, managed
@@ -201,7 +201,7 @@ log rotation.
 - [Model catalog](docs/model-catalog.md)
 - [Production package](docs/production-package.md)
 - [GitHub unsigned DMG release](docs/github-release.md)
-- [Release notes 0.1.23](docs/release-notes-0.1.23.md)
+- [Release notes 0.1.24](docs/release-notes-0.1.24.md)
 - [Open-source readiness](docs/open-source-readiness.md)
 
 ## Development

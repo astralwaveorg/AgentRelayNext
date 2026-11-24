@@ -3,6 +3,17 @@
 所有用户可见变化记录在此。产品版本以 `crates/relay-daemon/Cargo.toml` 为准；里程碑
 （M1/M2/M2.5/M3）不是版本号。
 
+## 0.1.24 — 2026-11-24
+
+### Fixed
+
+- Baseline checks now read only repository-local Git config, so a global Git LFS
+  filter no longer blocks every registered project.
+- Daemon tests use short `/private/tmp` paths for SUN_LEN-limited sockets while
+  keeping the setgid/sticky-bit ownership tests on the default temp directory.
+- GitHub Actions pins Rust 1.99.1 with rustfmt/clippy, builds on macOS 26 arm64,
+  and publishes the unsigned DMG through the tag workflow.
+
 ## 0.1.23 — 2026-11-24
 
 ### Added
