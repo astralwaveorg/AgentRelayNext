@@ -1,8 +1,8 @@
 //! Real project role pair. Only the explicitly approved local project launcher
 //! can attach this configuration to a daemon; the normal config loader cannot.
 use crate::route_pilot::{
-    self, cli_digest, subscription_key, Pilot, ProcessScope, StageSandbox, Temp, ENDPOINT,
-    GO_ENDPOINT, GO_MODEL, GO_USAGE, MODEL,
+    self, cli_digest, is_minimax_endpoint, minimax_endpoint, subscription_key, Pilot, ProcessScope,
+    StageSandbox, Temp, GO_ENDPOINT, GO_MODEL, GO_USAGE, MODEL,
 };
 use crate::service::AdapterProbeReport;
 use crate::workflow::{AdapterCandidate, SelectedPair};
@@ -27,6 +27,7 @@ const MAX_REVIEW_OUTPUT: usize = 16 * 1024;
 pub struct RoutePairSpec {
     claude: SealedCli,
     go: SealedCli,
+    endpoint: &'static str,
 }
 #[derive(Debug, Clone)]
 struct SealedCli {
@@ -62,6 +63,7 @@ impl RoutePairSpec {
         let result = Self {
             claude: SealedCli::open(claude)?,
             go: SealedCli::open(go)?,
+            endpoint: minimax_endpoint()?,
         };
         if result.claude.path == result.go.path || result.claude.sha256 == result.go.sha256 {
             return Err("PAIR_DISTINCT_CLIS_REQUIRED");
@@ -73,7 +75,7 @@ impl RoutePairSpec {
         json!({
             "route_version": 1,
             "prompt_policy_sha256":relay_git::sha256_hex(format!("{IMPLEMENT_INSTRUCTIONS}\n{REVIEW_INSTRUCTIONS}").as_bytes()),
-            "implement": {"tool":"Claude Code","model":MODEL,"endpoint":ENDPOINT,
+            "implement": {"tool":"Claude Code","model":MODEL,"endpoint":self.endpoint,
                 "cli":self.claude.path,"sha256":self.claude.sha256,
                 "data":["task goal","task brief","approved existing text files","baseline hash"],
                 "max_output_tokens":4096,"billing":"M Plan Credits may be used"},
@@ -193,6 +195,7 @@ impl LiveRoutes {
             .arg(&cli.sha256)
             .arg(repo)
             .arg(managed)
+            .arg(self.spec.endpoint)
             .env_clear()
             .stdin(Stdio::from(OwnedFd::from(read)));
         Ok(command)
@@ -241,7 +244,7 @@ fn body(stage: Stage, payload: &Value) -> Pilot<Value> {
 }
 
 fn execute(args: &[String]) -> Pilot<(Value, Value)> {
-    let [role, exe, sha, repo, managed] = args else {
+    let [role, exe, sha, repo, managed, endpoint] = args else {
         return Err("PROJECT_ROUTE_WORKER_ARGS");
     };
     // Only a supervising process that creates a separate worker group can
@@ -254,6 +257,9 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
         "review" => Stage::Review,
         _ => return Err("PROJECT_ROUTE_WORKER_ARGS"),
     };
+    if !is_minimax_endpoint(endpoint) {
+        return Err("PROJECT_ROUTE_WORKER_ARGS");
+    }
     let exe = SealedCli {
         path: exe.into(),
         sha256: sha.into(),
@@ -305,7 +311,7 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
                     scope,
                 },
                 prompt,
-                || route_pilot::upstream_scoped(scope, claude_key, ENDPOINT, Some(&request)),
+                || route_pilot::upstream_scoped(scope, claude_key, endpoint, Some(&request)),
             )?;
             let result =
                 decode_json_value(result.trim()).map_err(|_| "PROJECT_ROUTE_EDIT_PROTOCOL")?;

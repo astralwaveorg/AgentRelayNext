@@ -19,7 +19,7 @@ opencode=/opt/homebrew/bin/opencode
 "$relayctl" route-pilot review-offline-check "$opencode"
 ```
 
-`preview` 的 approval 绑定预览内容和实际 CLI 文件摘要。只有在账户所有者确认 M Plan 专用密钥、额度和这次样本后才可真实调用。根据 [MiniMax M Plan 说明](https://platform.minimax.io/docs/m-plan/quickstart.md)，套餐不足或模型未包含时可能扣 Credits；如不接受，停在离线步骤。本命令无法在请求前证明最终归属。如账户所有者已在 shell 环境中导出专用密钥（例如写入 `~/.zshrc`，变量名 `MINIMAX_API_KEY`），可用下列方式调用。在命令里只替换非秘密的 `<approval>`，不要把密钥贴到命令参数、聊天或日志里：
+`preview` 的 approval 绑定预览内容和实际 CLI 文件摘要。默认实现端点为国际站 `https://api.minimax.io/anthropic/v1/messages`；中国大陆站账户在预览和运行前导出 `RELAY_MINIMAX_ENDPOINT=https://api.minimax.cn/anthropic/v1/messages`，approval 会绑定实际端点。只有在账户所有者确认 M Plan 专用密钥、额度和这次样本后才可真实调用。根据 [MiniMax M Plan 说明](https://platform.minimax.io/docs/m-plan/quickstart.md)，套餐不足或模型未包含时可能扣 Credits；如不接受，停在离线步骤。本命令无法在请求前证明最终归属。如账户所有者已在 shell 环境中导出专用密钥（例如写入 `~/.zshrc`，变量名 `MINIMAX_API_KEY`），可用下列方式调用。在命令里只替换非秘密的 `<approval>`，不要把密钥贴到命令参数、聊天或日志里：
 
 ```sh
 set -o pipefail

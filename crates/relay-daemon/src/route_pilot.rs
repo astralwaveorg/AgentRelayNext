@@ -11,6 +11,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub(crate) const ENDPOINT: &str = "https://api.minimax.io/anthropic/v1/messages";
+pub(crate) const CN_ENDPOINT: &str = "https://api.minimax.cn/anthropic/v1/messages";
 pub(crate) const MODEL: &str = "MiniMax-M3.1-Flash";
 pub(crate) const GO_ENDPOINT: &str = "https://opencode.ai/inference/go/openai/v1/chat/completions";
 pub(crate) const GO_USAGE: &str = "https://opencode.ai/inference/go/v1/usage";
@@ -22,6 +23,26 @@ const LOCAL_PATH: &str = "/anthropic/v1/messages";
 pub(crate) const LIMIT: usize = 128 * 1024;
 
 pub(crate) type Pilot<T> = Result<T, &'static str>;
+
+fn minimax_endpoint_value(value: Option<&str>) -> Pilot<&'static str> {
+    match value {
+        None | Some(ENDPOINT) => Ok(ENDPOINT),
+        Some(CN_ENDPOINT) => Ok(CN_ENDPOINT),
+        Some(_) => Err("MINIMAX_ENDPOINT_INVALID"),
+    }
+}
+
+pub(crate) fn minimax_endpoint() -> Pilot<&'static str> {
+    match std::env::var("RELAY_MINIMAX_ENDPOINT") {
+        Ok(value) => minimax_endpoint_value(Some(&value)),
+        Err(std::env::VarError::NotPresent) => minimax_endpoint_value(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err("MINIMAX_ENDPOINT_INVALID"),
+    }
+}
+
+pub(crate) fn is_minimax_endpoint(endpoint: &str) -> bool {
+    endpoint == ENDPOINT || endpoint == CN_ENDPOINT
+}
 
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
@@ -97,7 +118,7 @@ fn plan(cli: &Path, review: bool, go: bool, edit: bool) -> Pilot<Value> {
         "key_kind":if go {"Console API key from the subscribed workspace"} else {"M Plan subscription key"},
         "billing":if go {"operator must confirm Extra Usage is off; check Go meters before sending and require Go billing with zero balance charge in the response"}
             else {"operator must confirm available plan and that credits are acceptable if used; actual debit unverified"},
-        "endpoint":if go {GO_ENDPOINT} else {ENDPOINT},
+        "endpoint":if go {GO_ENDPOINT} else {minimax_endpoint()?},
         "quota_endpoint":go.then_some(GO_USAGE),
         "request":if review { review_request(if go {GO_MODEL} else {REVIEW_MODEL}) } else if edit { edit_request() } else { request() },
         "sample":if edit { "bounded_file_edit" } else { "route_probe" },
@@ -293,10 +314,16 @@ pub(crate) fn admit_route(
 }
 
 fn upstream_command(endpoint: &str, request: Option<&Value>) -> Pilot<Command> {
-    let post = match (endpoint, request.is_some()) {
-        (ENDPOINT | GO_ENDPOINT, true) => true,
-        (GO_USAGE, false) => false,
-        _ => return Err("UPSTREAM_ROUTE"),
+    let post = if request.is_some() {
+        if endpoint == GO_ENDPOINT || is_minimax_endpoint(endpoint) {
+            true
+        } else {
+            return Err("UPSTREAM_ROUTE");
+        }
+    } else if endpoint == GO_USAGE {
+        false
+    } else {
+        return Err("UPSTREAM_ROUTE");
     };
     let mut command = Command::new("/usr/bin/curl");
     // curl only honors --disable as the first argument.
@@ -426,7 +453,7 @@ pub(crate) fn upstream_scoped(
         "429" => Err("UPSTREAM_RATE_LIMIT"),
         "200"
             if content.split(';').next()
-                == Some(if endpoint == ENDPOINT {
+                == Some(if is_minimax_endpoint(endpoint) {
                     "text/event-stream"
                 } else {
                     "application/json"
@@ -1151,6 +1178,7 @@ fn pair_entry(action: &str, claude_bin: &str, args: &[String]) -> Pilot<Value> {
                 if claude_key == go_key || go_key.starts_with("sk-cp-") {
                     return Err("PAIR_REQUIRES_TWO_KEYS");
                 }
+                let endpoint = minimax_endpoint()?;
                 // Verify that the second stage is eligible before the first can spend,
                 // and refresh just before the actual Go request.
                 go_meters(&upstream(go_key, GO_USAGE, None)?)?;
@@ -1159,7 +1187,7 @@ fn pair_entry(action: &str, claude_bin: &str, args: &[String]) -> Pilot<Value> {
                     &tmp.0,
                     &claude,
                     &opencode,
-                    || upstream(claude_key, ENDPOINT, Some(&edit_request())),
+                    || upstream(claude_key, endpoint, Some(&edit_request())),
                     |request, _| {
                         go_meters(&upstream(go_key, GO_USAGE, None)?)?;
                         upstream(go_key, GO_ENDPOINT, Some(request))
@@ -1286,16 +1314,19 @@ fn entry(args: &[String]) -> Pilot<Value> {
                         upstream(key, GO_ENDPOINT, Some(&review_request(GO_MODEL)))
                     })
                 } else if review {
+                    let endpoint = minimax_endpoint()?;
                     review_sample(&tmp.0, &cli, false, || {
-                        upstream(key, ENDPOINT, Some(&review_request(REVIEW_MODEL)))
+                        upstream(key, endpoint, Some(&review_request(REVIEW_MODEL)))
                     })
                 } else if edit {
+                    let endpoint = minimax_endpoint()?;
                     edit_sample(&tmp.0, &cli, || {
-                        upstream(key, ENDPOINT, Some(&edit_request()))
+                        upstream(key, endpoint, Some(&edit_request()))
                     })
                     .map(|edit| edit.evidence)
                 } else {
-                    sample(&tmp.0, &cli, || upstream(key, ENDPOINT, Some(&request())))
+                    let endpoint = minimax_endpoint()?;
+                    sample(&tmp.0, &cli, || upstream(key, endpoint, Some(&request())))
                 }
             })();
             input.fill(0);
@@ -1337,6 +1368,7 @@ mod tests {
     fn upstream_uses_one_pinned_https_endpoint_and_a_real_post_body() {
         for (endpoint, body) in [
             (ENDPOINT, Some(edit_request())),
+            (CN_ENDPOINT, Some(edit_request())),
             (GO_ENDPOINT, Some(review_request(GO_MODEL))),
             (GO_USAGE, None),
         ] {
@@ -1354,6 +1386,20 @@ mod tests {
         }
         assert!(upstream_command(GO_USAGE, Some(&edit_request())).is_err());
         assert!(upstream_command("https://example.invalid", Some(&edit_request())).is_err());
+    }
+
+    #[test]
+    fn minimax_endpoint_defaults_international_and_accepts_cn_override() {
+        assert_eq!(minimax_endpoint_value(None), Ok(ENDPOINT));
+        assert_eq!(minimax_endpoint_value(Some(ENDPOINT)), Ok(ENDPOINT));
+        assert_eq!(minimax_endpoint_value(Some(CN_ENDPOINT)), Ok(CN_ENDPOINT));
+        assert_eq!(
+            minimax_endpoint_value(Some("https://example.invalid/v1/messages")),
+            Err("MINIMAX_ENDPOINT_INVALID")
+        );
+        assert!(is_minimax_endpoint(ENDPOINT));
+        assert!(is_minimax_endpoint(CN_ENDPOINT));
+        assert!(!is_minimax_endpoint(GO_ENDPOINT));
     }
 
     #[test]
