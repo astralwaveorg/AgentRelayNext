@@ -127,6 +127,16 @@ fn independence_problem(
     if implementer.probe.binary == reviewer.probe.binary {
         return Err("同一工具");
     }
+    if let (Some(left), Some(right)) = (
+        &implementer.probe.actual_model,
+        &reviewer.probe.actual_model,
+    ) {
+        if crate::model_catalog::normalize_model(left)
+            == crate::model_catalog::normalize_model(right)
+        {
+            return Err("同一模型，别名不算独立");
+        }
+    }
     if implementer.probe.actual_model == reviewer.probe.actual_model {
         return Err("同一模型，别名不算独立");
     }
@@ -323,6 +333,14 @@ mod tests {
                 &candidate("b", "tool-b", "m2")
             ),
             Ok(())
+        );
+        assert_eq!(
+            independence_problem(
+                &candidate("a", "tool-a", "deepseek-v4.1-flash"),
+                &candidate("b", "tool-b", "opencode-go/deepseek-v4.1-flash")
+            )
+            .unwrap_err(),
+            "同一模型，别名不算独立"
         );
         assert_eq!(
             independence_problem(

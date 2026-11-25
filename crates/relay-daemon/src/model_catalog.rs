@@ -5,6 +5,7 @@
 //! the user must still confirm the native plan and credentials in preview.
 
 use serde_json::{json, Value};
+#[cfg(test)]
 use std::collections::BTreeSet;
 
 pub const CATALOG_VERSION: u32 = 1;
@@ -82,10 +83,46 @@ pub fn catalog() -> Value {
     })
 }
 
+/// Normalized model identity shared by the catalog and independence checks:
+/// lower-case, provider prefix removed, catalog aliases folded onto the
+/// canonical id. Two entries with equal normalized ids are the same model.
+pub fn normalize_model(model: &str) -> String {
+    let mut candidate = model.trim().to_ascii_lowercase();
+    if let Some((_provider, tail)) = candidate.rsplit_once('/') {
+        candidate = tail.to_owned();
+    }
+    if let Some(entries) = entries().as_array() {
+        for entry in entries {
+            let mut names: Vec<String> = Vec::new();
+            if let Some(id) = entry["id"].as_str() {
+                names.push(id.rsplit('/').next().unwrap_or(id).to_ascii_lowercase());
+            }
+            if let Some(aliases) = entry["aliases"].as_array() {
+                for alias in aliases.iter().filter_map(|a| a.as_str()) {
+                    names.push(
+                        alias
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(alias)
+                            .to_ascii_lowercase(),
+                    );
+                }
+            }
+            if names.contains(&candidate) {
+                if let Some(id) = entry["id"].as_str() {
+                    return id.rsplit('/').next().unwrap_or(id).to_ascii_lowercase();
+                }
+            }
+        }
+    }
+    candidate
+}
+
 fn entry_id(entry: &Value) -> &str {
     entry["id"].as_str().unwrap_or_default()
 }
 
+#[cfg(test)]
 fn aliases(entry: &Value) -> BTreeSet<&str> {
     let mut set = BTreeSet::new();
     if let Some(id) = entry["id"].as_str() {
@@ -141,9 +178,7 @@ pub fn recommend() -> Value {
             if implement["tool"] == review["tool"] {
                 continue;
             }
-            let left = aliases(implement);
-            let right = aliases(review);
-            if left.intersection(&right).next().is_some() {
+            if normalize_model(entry_id(implement)) == normalize_model(entry_id(review)) {
                 continue;
             }
             return json!({
@@ -229,6 +264,18 @@ mod tests {
         let a = aliases(&entry);
         let b = aliases(&alias);
         assert!(a.intersection(&b).next().is_some());
+        assert_eq!(
+            normalize_model("zhipuai/glm-5.3-flash"),
+            normalize_model("glm-5.3-flash")
+        );
+        assert_eq!(
+            normalize_model("opencode-go/deepseek-v4.1-flash"),
+            "deepseek-v4.1-flash"
+        );
+        assert_ne!(
+            normalize_model("deepseek-v4.1-flash"),
+            normalize_model("MiniMax-M3.1-Flash")
+        );
     }
 
     #[test]
