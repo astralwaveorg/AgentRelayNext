@@ -343,3 +343,37 @@ fn credential_redaction_keeps_byte_positions_with_unicode_prefix() {
 
     remove_dir(&dir);
 }
+
+/// A15：常见凭据形态在收据摘要中被过滤，普通输出不受影响。
+#[test]
+fn credential_like_output_is_redacted() {
+    let dir = temp_dir("a15-redact");
+    let root = dir.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    git_out(&root, &["init", "-q", "-b", "main"]);
+    fs::write(root.join("a.txt"), "one\n").unwrap();
+    git_out(&root, &["add", "a.txt"]);
+    git_out(&root, &["commit", "-q", "-m", "baseline"]);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    let report = create_worktree(&root, &dir.join("managed"), "task_a15", 1, &head).unwrap();
+    let wt = report.path.clone();
+    let config = VerifyConfig::new(vec![VerifyRule {
+        id: "leak".into(),
+        executable: "/usr/bin/printf".into(),
+        argv: vec![
+            "normal\\ntoken = abc123secret\\nsk-abcdefgh12345678\\nghp_abcdefgh12345678\\nmonkey = value\\n"
+                .into(),
+        ],
+        timeout_ms: 5_000,
+    }])
+    .unwrap();
+    let outcome = run_rule(&config, "leak", &wt).unwrap();
+    let excerpt = &outcome.output_excerpt;
+    assert!(excerpt.contains("normal"));
+    assert!(!excerpt.contains("abc123secret"), "{excerpt:?}");
+    assert!(!excerpt.contains("sk-abcdefgh"), "{excerpt:?}");
+    assert!(!excerpt.contains("ghp_abcdefgh"), "{excerpt:?}");
+    assert!(excerpt.contains("[已过滤]"), "{excerpt:?}");
+    assert!(excerpt.contains("monkey = value"), "{excerpt:?}");
+    remove_dir(&dir);
+}

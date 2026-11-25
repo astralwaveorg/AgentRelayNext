@@ -259,13 +259,44 @@ fn redact_credentials(text: &str) -> String {
     text.lines().map(redact_line).collect::<Vec<_>>().join("\n")
 }
 
+/// Common credential token shapes: the whole line is replaced.
+fn looks_like_token(line: &str) -> bool {
+    const PREFIXES: [&str; 5] = ["sk-", "sk_", "ghp_", "xoxb-", "AKIA"];
+    let lower = line.to_ascii_lowercase();
+    PREFIXES.iter().any(|prefix| {
+        let needle = prefix.to_ascii_lowercase();
+        let mut from = 0usize;
+        while let Some(position) = lower[from..].find(&needle) {
+            let start = from + position + needle.len();
+            let count = line[start..]
+                .bytes()
+                .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+                .count();
+            if count >= 8 {
+                return true;
+            }
+            from = start;
+        }
+        false
+    })
+}
+
 fn redact_line(line: &str) -> String {
-    const KEYS: [&str; 6] = [
+    if looks_like_token(line) {
+        return "[已过滤]".to_owned();
+    }
+    const KEYS: [&str; 12] = [
         "password",
         "passwd",
         "token",
         "secret",
         "api_key",
+        "api-key",
+        "apikey",
+        "access_key",
+        "accesskey",
+        "private_key",
+        "client_secret",
         "authorization",
     ];
     // ASCII 大小写匹配在原始字节上进行：全量小写会改变 Unicode 前缀的
@@ -279,6 +310,14 @@ fn redact_line(line: &str) -> String {
         let mut from = 0usize;
         while from + key_bytes.len() <= bytes.len() {
             if bytes[from..from + key_bytes.len()].eq_ignore_ascii_case(key_bytes) {
+                // Require a word boundary before the key so e.g. "monkey=" is
+                // not mistaken for a credential ("-" still allows x-api-key).
+                let boundary = from == 0
+                    || !(bytes[from - 1].is_ascii_alphanumeric() || bytes[from - 1] == b'_');
+                if !boundary {
+                    from += 1;
+                    continue;
+                }
                 let key_end = from + key_bytes.len();
                 let mut sep = key_end;
                 while sep < bytes.len() && (bytes[sep] == b' ' || bytes[sep] == b'\t') {
