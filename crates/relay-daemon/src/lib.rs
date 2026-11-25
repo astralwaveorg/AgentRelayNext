@@ -617,6 +617,8 @@ pub fn start_with_config(
             source: e,
         }
     })?;
+    // Socket 文件必须只对当前用户可读写（实例目录已是 0700）。
+    let _ = fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600));
     // socket 文件属主核对（服务端侧两端 UID 之一）。
     let sock_meta = fs::symlink_metadata(&socket_path).map_err(|e| {
         // 读元数据失败：本 daemon 刚创建的端点连同记录一起清理。
@@ -636,17 +638,15 @@ pub fn start_with_config(
         });
     }
     // 持久归属记录：本实例创建的凭据（重启时据此确认可回收）。
-    fs::write(
-        socket_own_record_path(instance_dir),
-        format!("{}:{}", sock_meta.dev(), sock_meta.ino()),
-    )
-    .map_err(|e| {
+    let own_path = socket_own_record_path(instance_dir);
+    fs::write(&own_path, format!("{}:{}", sock_meta.dev(), sock_meta.ino())).map_err(|e| {
         let _ = fs::remove_file(&socket_path);
         DaemonError::PathRead {
-            path: socket_own_record_path(instance_dir),
+            path: own_path.clone(),
             source: e,
         }
     })?;
+    let _ = fs::set_permissions(&own_path, fs::Permissions::from_mode(0o600));
     Ok(Daemon {
         instance_dir: instance_dir.to_owned(),
         store,

@@ -322,6 +322,7 @@ impl Store {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         check_schema_version(&conn)?;
+        verify_schema(&conn)?;
         Ok(Store {
             conn: Mutex::new(conn),
         })
@@ -1944,7 +1945,7 @@ fn ensure_schema(conn: &mut Connection) -> Result<(), StoreError> {
         )
         .map(|n| n > 0)?;
     if has_meta {
-        return Ok(());
+        return verify_schema(conn);
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute_batch(SCHEMA_SQL)?;
@@ -1954,6 +1955,58 @@ fn ensure_schema(conn: &mut Connection) -> Result<(), StoreError> {
         params![SCHEMA_VERSION.to_string()],
     )?;
     tx.commit()?;
+    verify_schema(conn)
+}
+
+/// Expected tables/columns derived from the same SQL used for a fresh instance.
+fn expected_schema() -> Result<Vec<(String, Vec<String>)>, StoreError> {
+    let conn = Connection::open_in_memory()?;
+    conn.execute_batch(SCHEMA_SQL)?;
+    conn.execute_batch(stage_run::STAGE_SCHEMA)?;
+    let mut statement = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )?;
+    let names: Vec<String> = statement
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    drop(statement);
+    let mut tables = Vec::new();
+    for name in names {
+        let mut statement = conn.prepare(&format!("PRAGMA table_info('{name}')"))?;
+        let columns: Vec<String> = statement
+            .query_map([], |row| row.get(1))?
+            .collect::<Result<_, _>>()?;
+        tables.push((name, columns));
+    }
+    Ok(tables)
+}
+
+/// An existing instance must contain every table and column a fresh schema
+/// creates. Missing pieces are an environment error, never silently repaired.
+fn verify_schema(conn: &Connection) -> Result<(), StoreError> {
+    for (table, columns) in expected_schema()? {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            [&table],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Err(StoreError::Environment(format!(
+                "实例数据库缺少必需表 {table}"
+            )));
+        }
+        let mut statement = conn.prepare(&format!("PRAGMA table_info('{table}')"))?;
+        let actual: Vec<String> = statement
+            .query_map([], |row| row.get(1))?
+            .collect::<Result<_, _>>()?;
+        for column in columns {
+            if !actual.iter().any(|name| *name == column) {
+                return Err(StoreError::Environment(format!(
+                    "实例数据库表 {table} 缺列 {column}"
+                )));
+            }
+        }
+    }
     Ok(())
 }
 

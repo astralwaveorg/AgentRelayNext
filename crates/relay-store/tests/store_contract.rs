@@ -4248,3 +4248,42 @@ fn stage_permit_is_single_use_and_recovers_without_replay() {
     drop(store);
     remove_dir(&dir);
 }
+
+/// A19：已有实例缺表/缺列时必须拒绝打开（可写与只读一致），不得静默补建。
+#[test]
+fn missing_required_table_or_column_is_rejected() {
+    let dir = temp_dir("schema-full-check");
+    let path = dir.join("relay.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute_batch("DROP TABLE stage_runs")
+            .unwrap();
+    }
+    assert!(matches!(
+        Store::open(&path),
+        Err(StoreError::Environment(_))
+    ));
+    assert!(matches!(
+        Store::open_read_only(&path),
+        Err(StoreError::Environment(_))
+    ));
+
+    // Missing column in an existing table is rejected too.
+    let path2 = dir.join("relay2.db");
+    {
+        let store = Store::open(&path2).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute_batch("ALTER TABLE tasks DROP COLUMN reason_code")
+            .unwrap();
+    }
+    assert!(matches!(
+        Store::open(&path2),
+        Err(StoreError::Environment(_))
+    ));
+    fs::remove_dir_all(&dir).ok();
+}

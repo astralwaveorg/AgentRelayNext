@@ -246,3 +246,24 @@ fn lock_releases_after_daemon_drop_allowing_restart() {
 
     remove_dir(&dir);
 }
+
+/// A18：socket 与归属记录只允许当前用户读写（0600）。
+#[test]
+fn socket_and_ownership_record_are_user_only() {
+    let dir = temp_dir("perm");
+    let daemon = relay_daemon::start(&dir, T0).unwrap();
+    let socket_mode = fs::metadata(dir.join("relay.sock"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(socket_mode, 0o600, "relay.sock 必须为 0600");
+    let own_mode = fs::metadata(dir.join("relay.sock.own"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(own_mode, 0o600, "relay.sock.own 必须为 0600");
+    drop(daemon);
+    remove_dir(&dir);
+}
