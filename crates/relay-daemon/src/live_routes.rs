@@ -28,6 +28,8 @@ pub struct RoutePairSpec {
     claude: SealedCli,
     go: SealedCli,
     endpoint: &'static str,
+    implement_model: String,
+    implement_fallback: Option<String>,
     review_model: String,
     review_fallback: Option<String>,
     retry_max: u32,
@@ -64,7 +66,13 @@ impl RoutePairSpec {
         if !cfg!(target_os = "macos") {
             return Err("PROJECT_ROUTE_REQUIRES_MACOS");
         }
+        let implement_model = route_pilot::implement_model()?;
         let review_model = go_model()?;
+        if crate::model_catalog::normalize_model(&implement_model)
+            == crate::model_catalog::normalize_model(&review_model)
+        {
+            return Err("PAIR_MODELS_NOT_INDEPENDENT");
+        }
         let retry_max = std::env::var("RELAY_RETRY_MAX").ok();
         let retry_interval = std::env::var("RELAY_RETRY_INTERVAL_MS").ok();
         let (retry_max, retry_interval) =
@@ -72,10 +80,13 @@ impl RoutePairSpec {
         let fallback = std::env::var("RELAY_REVIEW_FALLBACK_MODEL").ok();
         let review_fallback =
             route_pilot::fallback_model_value(fallback.as_deref(), &review_model)?;
+        let implement_fallback = route_pilot::implement_fallback(&implement_model)?;
         let result = Self {
             claude: SealedCli::open(claude)?,
             go: SealedCli::open(go)?,
             endpoint: minimax_endpoint()?,
+            implement_model,
+            implement_fallback,
             review_model,
             review_fallback,
             retry_max,
@@ -91,7 +102,8 @@ impl RoutePairSpec {
         json!({
             "route_version": 1,
             "prompt_policy_sha256":relay_git::sha256_hex(format!("{IMPLEMENT_INSTRUCTIONS}\n{REVIEW_INSTRUCTIONS}").as_bytes()),
-            "implement": {"tool":"Claude Code","model":MODEL,"endpoint":self.endpoint,
+            "implement": {"tool":"Claude Code","model":self.implement_model,"endpoint":self.endpoint,
+                "fallback_model":self.implement_fallback,
                 "cli":self.claude.path,"sha256":self.claude.sha256,
                 "data":["task goal","task brief","approved existing text files","baseline hash"],
                 "max_output_tokens":4096,"billing":"M Plan Credits may be used"},
@@ -148,6 +160,14 @@ impl LiveRoutes {
     pub(crate) fn check(&self) -> Pilot<()> {
         self.spec.claude.check()?;
         self.spec.go.check()
+    }
+
+    pub(crate) fn implement_model(&self) -> &str {
+        &self.spec.implement_model
+    }
+
+    pub(crate) fn implement_fallback(&self) -> Option<&str> {
+        self.spec.implement_fallback.as_deref()
     }
 
     pub(crate) fn review_model(&self) -> &str {
@@ -217,6 +237,8 @@ impl LiveRoutes {
             })?;
         let spec = json!({
             "endpoint": self.spec.endpoint,
+            "implement_model": self.spec.implement_model,
+            "implement_fallback": self.spec.implement_fallback,
             "review_model": self.spec.review_model,
             "review_fallback": self.spec.review_fallback,
             "retry_max": self.spec.retry_max,
@@ -290,6 +312,15 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
     let review_model = spec["review_model"]
         .as_str()
         .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
+    let implement_model = spec["implement_model"]
+        .as_str()
+        .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
+    if route_pilot::implement_model_value(Some(implement_model)).is_err() {
+        return Err("PROJECT_ROUTE_WORKER_ARGS");
+    }
+    let implement_fallback = spec["implement_fallback"].as_str().map(str::to_owned);
+    route_pilot::implement_fallback_value(implement_fallback.as_deref(), implement_model)
+        .map_err(|_| "PROJECT_ROUTE_WORKER_ARGS")?;
     let retry_max = spec["retry_max"]
         .as_u64()
         .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
@@ -370,33 +401,44 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
     };
     match stage {
         Stage::Implement => {
-            let request = body(stage, &payload, review_model)?;
-            let prompt = request["messages"][0]["content"]
-                .as_str()
-                .ok_or("PROJECT_ROUTE_WORKER_INPUT")?;
-            let (result, usage) = route_pilot::claude_scoped(
-                StageSandbox {
-                    cli: &exe.path,
-                    home: &tmp.0,
-                    repo,
-                    managed,
-                    scope,
-                },
-                prompt,
-                || {
-                    route_pilot::upstream_with_retry(
+            let attempt = |model: &str| -> Pilot<(Value, Value)> {
+                let request = body(stage, &payload, model)?;
+                let prompt = request["messages"][0]["content"]
+                    .as_str()
+                    .ok_or("PROJECT_ROUTE_WORKER_INPUT")?;
+                let tmp = Temp::new()?;
+                let (result, usage) = route_pilot::claude_scoped(
+                    StageSandbox {
+                        cli: &exe.path,
+                        home: &tmp.0,
+                        repo,
+                        managed,
                         scope,
-                        claude_key,
-                        endpoint,
-                        Some(&request),
-                        retry_max as u32,
-                        retry_interval,
-                    )
-                },
-            )?;
-            let result =
-                decode_json_value(result.trim()).map_err(|_| "PROJECT_ROUTE_EDIT_PROTOCOL")?;
-            Ok((result, json!({"actual_model":MODEL,"provider_usage":usage})))
+                    },
+                    model,
+                    prompt,
+                    || {
+                        route_pilot::upstream_with_retry(
+                            scope,
+                            claude_key,
+                            endpoint,
+                            Some(&request),
+                            retry_max as u32,
+                            retry_interval,
+                        )
+                    },
+                )?;
+                let result =
+                    decode_json_value(result.trim()).map_err(|_| "PROJECT_ROUTE_EDIT_PROTOCOL")?;
+                Ok((result, json!({"actual_model":model,"provider_usage":usage})))
+            };
+            match attempt(implement_model) {
+                Ok(value) => Ok(value),
+                Err("UPSTREAM_QUOTA") if implement_fallback.is_some() => {
+                    attempt(implement_fallback.as_deref().expect("fallback checked"))
+                }
+                Err(code) => Err(code),
+            }
         }
         Stage::Review => {
             let model = if meter_quota {
@@ -453,6 +495,7 @@ pub fn worker(args: &[String]) -> Result<(), u8> {
             let termination = match code {
                 "UPSTREAM_AUTH" => "auth_failed",
                 "UPSTREAM_RETRY_EXHAUSTED" => "retry_exhausted",
+                "UPSTREAM_QUOTA" => "quota_exhausted",
                 "UPSTREAM_RATE_LIMIT" | "GO_QUOTA_EXHAUSTED" => "rate_limited",
                 _ => "unsupported_protocol",
             };
@@ -467,9 +510,12 @@ pub fn worker(args: &[String]) -> Result<(), u8> {
 
 // Rebuild the audit record from known fields. No free text, provider payload,
 // prompt, patch, credential, or CLI stdout can enter the local event.
+#[allow(clippy::too_many_arguments)]
 fn usage_record(
     stage: Stage,
     value: &Value,
+    implement_model: Option<&str>,
+    implement_fallback: Option<&str>,
     review_model: Option<&str>,
     review_fallback: Option<&str>,
 ) -> Option<(&'static str, Value)> {
@@ -477,13 +523,20 @@ fn usage_record(
     let input = usage["input_tokens"].as_u64();
     let output = usage["output_tokens"].as_u64();
     match stage {
-        Stage::Implement if value["actual_model"] == MODEL && usage.is_object() => Some((
-            "route_implement_usage",
-            json!({"actual_model":MODEL,"input_tokens":input,"output_tokens":output,
-                "cache_creation_input_tokens":usage["cache_creation_input_tokens"].as_u64(),
-                "cache_read_input_tokens":usage["cache_read_input_tokens"].as_u64(),
-                "charge_attribution":"unverified"}),
-        )),
+        Stage::Implement if usage.is_object() => {
+            let primary = implement_model?;
+            let actual = value["actual_model"].as_str()?;
+            if actual != primary && Some(actual) != implement_fallback {
+                return None;
+            }
+            Some((
+                "route_implement_usage",
+                json!({"actual_model":actual,"input_tokens":input,"output_tokens":output,
+                    "cache_creation_input_tokens":usage["cache_creation_input_tokens"].as_u64(),
+                    "cache_read_input_tokens":usage["cache_read_input_tokens"].as_u64(),
+                    "charge_attribution":"unverified"}),
+            ))
+        }
         Stage::Review => {
             let primary = review_model?;
             let actual = value["actual_model"].as_str()?;
@@ -513,17 +566,29 @@ fn usage_record(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_usage(
     store: &relay_store::Store,
     task_id: &str,
     attempt: u32,
     stage: Stage,
     event: Option<&Value>,
+    implement_model: Option<&str>,
+    implement_fallback: Option<&str>,
     review_model: Option<&str>,
     review_fallback: Option<&str>,
 ) -> Result<(), &'static str> {
     let (kind, data) = event
-        .and_then(|value| usage_record(stage, value, review_model, review_fallback))
+        .and_then(|value| {
+            usage_record(
+                stage,
+                value,
+                implement_model,
+                implement_fallback,
+                review_model,
+                review_fallback,
+            )
+        })
         .ok_or("ROUTE_USAGE_UNVERIFIED")?;
     store
         .append_event(
@@ -544,7 +609,8 @@ mod tests {
     fn usage_audit_retains_only_allowed_fields_and_distinguishes_billing() {
         let implement = json!({"actual_model":MODEL,"provider_usage":{"input_tokens":31},
             "charge_attribution":"claimed","raw":"must never persist"});
-        let (kind, record) = usage_record(Stage::Implement, &implement, None, None).unwrap();
+        let (kind, record) =
+            usage_record(Stage::Implement, &implement, Some(MODEL), None, None, None).unwrap();
         assert_eq!(kind, "route_implement_usage");
         assert_eq!(
             record,
@@ -558,12 +624,21 @@ mod tests {
         let fallback_ok = usage_record(
             Stage::Review,
             &review,
+            Some(MODEL),
+            None,
             Some("primary-model"),
             Some(route_pilot::GO_MODEL),
         );
         assert!(fallback_ok.is_some(), "fallback model must be accepted");
-        let (kind, record) =
-            usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL), None).unwrap();
+        let (kind, record) = usage_record(
+            Stage::Review,
+            &review,
+            Some(MODEL),
+            None,
+            Some(route_pilot::GO_MODEL),
+            None,
+        )
+        .unwrap();
         assert_eq!(kind, "route_review_usage");
         assert_eq!(
             record,
@@ -571,10 +646,24 @@ mod tests {
             "provider_reported_source":"go-plus","balance_charge_usd":0,"allowance_usd":0.002})
         );
         review["charge_attribution"]["balance_charge_usd"] = json!(0.03);
-        assert!(usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL), None).is_none());
-        assert!(
-            usage_record(Stage::Review, &implement, Some(route_pilot::GO_MODEL), None).is_none()
-        );
-        assert!(usage_record(Stage::Review, &review, None, None).is_none());
+        assert!(usage_record(
+            Stage::Review,
+            &review,
+            Some(MODEL),
+            None,
+            Some(route_pilot::GO_MODEL),
+            None
+        )
+        .is_none());
+        assert!(usage_record(
+            Stage::Review,
+            &implement,
+            Some(MODEL),
+            None,
+            Some(route_pilot::GO_MODEL),
+            None
+        )
+        .is_none());
+        assert!(usage_record(Stage::Review, &review, Some(MODEL), None, None, None).is_none());
     }
 }

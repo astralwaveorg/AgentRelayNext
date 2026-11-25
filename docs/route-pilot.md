@@ -33,7 +33,7 @@ HTTP 认证、限流、请求不匹配、实际模型不符或缺终态都停止
 
 ## OpenCode Go：DeepSeek-V4.1-Flash
 
-`go-preview` 与 `go-offline-check` 核验 `opencode-go/deepseek-v4.1-flash`。这条路线使用 OpenCode Go 官方模型目录列出的 Chat Completions 接口，不使用上文的 MiniMax 评审候选。评审模型默认 `deepseek-v4.1-flash`；如需选择工作区已启用的其他 OpenCode Go 模型，在预览和运行前导出 `RELAY_GO_MODEL=<模型 ID>`，approval 会绑定实际模型，且不得与实现模型相同。`RELAY_RETRY_MAX`（默认 10，上限 20）与 `RELAY_RETRY_INTERVAL_MS`（默认 30000，1–120 秒）控制 429/传输失败的重试；耗尽后任务明确失败。`RELAY_REVIEW_FALLBACK_MODEL` 可在 OpenCode Go 额度耗尽时切换到同一账户内的备用模型，approval 会绑定该备用模型。在仓库开发版中可这样重跑：
+`go-preview` 与 `go-offline-check` 核验 `opencode-go/deepseek-v4.1-flash`。这条路线使用 OpenCode Go 官方模型目录列出的 Chat Completions 接口，不使用上文的 MiniMax 评审候选。评审模型默认 `deepseek-v4.1-flash`；如需选择工作区已启用的其他 OpenCode Go 模型，在预览和运行前导出 `RELAY_GO_MODEL=<模型 ID>`，approval 会绑定实际模型，且不得与实现模型相同。`RELAY_RETRY_MAX`（默认 10，上限 20）与 `RELAY_RETRY_INTERVAL_MS`（默认 30000，1–120 秒）控制 429/传输失败的重试；耗尽后任务明确失败。实现模型默认 `MiniMax-M3.1-Flash`，可用 `RELAY_IMPLEMENT_MODEL` 覆盖；`RELAY_IMPLEMENT_FALLBACK_MODEL` 在额度类错误时切换到同账户备用模型（与评审模型归一化后仍须不同）。`RELAY_REVIEW_FALLBACK_MODEL` 可在 OpenCode Go 额度耗尽时切换到同一账户内的备用模型，approval 会绑定该备用模型。在仓库开发版中可这样重跑：
 
 ```sh
 cargo run -q -p relay-daemon --locked --offline --bin relayctl -- route-pilot go-preview /opt/homebrew/bin/opencode

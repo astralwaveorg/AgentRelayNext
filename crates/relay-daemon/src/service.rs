@@ -2906,6 +2906,14 @@ impl M1Service {
                     attempt_no,
                     crate::live_routes::Stage::Implement,
                     evidence.as_ref(),
+                    self.config
+                        .live_routes
+                        .as_ref()
+                        .map(|routes| routes.implement_model()),
+                    self.config
+                        .live_routes
+                        .as_ref()
+                        .and_then(|routes| routes.implement_fallback()),
                     None,
                     None,
                 ) {

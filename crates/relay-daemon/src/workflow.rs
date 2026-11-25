@@ -1110,6 +1110,8 @@ impl M1Service {
                     attempt_no,
                     crate::live_routes::Stage::Review,
                     run.events.provider_evidence.as_ref(),
+                    Some(routes.implement_model()),
+                    routes.implement_fallback(),
                     Some(routes.review_model()),
                     routes.review_fallback(),
                 ) {

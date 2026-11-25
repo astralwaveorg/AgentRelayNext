@@ -119,6 +119,53 @@ pub(crate) fn go_model() -> Pilot<String> {
     }
 }
 
+pub(crate) fn implement_model_value(value: Option<&str>) -> Pilot<String> {
+    let model = value.unwrap_or(MODEL);
+    if model.is_empty()
+        || model.len() > 128
+        || !model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+    {
+        return Err("IMPLEMENT_MODEL_INVALID");
+    }
+    Ok(model.to_owned())
+}
+
+pub(crate) fn implement_model() -> Pilot<String> {
+    match std::env::var("RELAY_IMPLEMENT_MODEL") {
+        Ok(value) => implement_model_value(Some(&value)),
+        Err(std::env::VarError::NotPresent) => implement_model_value(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err("IMPLEMENT_MODEL_INVALID"),
+    }
+}
+
+pub(crate) fn implement_fallback_value(
+    value: Option<&str>,
+    primary: &str,
+) -> Pilot<Option<String>> {
+    let Some(model) = value.filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    if model.len() > 128
+        || !model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+        || model == primary
+    {
+        return Err("FALLBACK_MODEL_INVALID");
+    }
+    Ok(Some(model.to_owned()))
+}
+
+pub(crate) fn implement_fallback(primary: &str) -> Pilot<Option<String>> {
+    match std::env::var("RELAY_IMPLEMENT_FALLBACK_MODEL") {
+        Ok(value) => implement_fallback_value(Some(&value), primary),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err("FALLBACK_MODEL_INVALID"),
+    }
+}
+
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
@@ -560,6 +607,7 @@ pub(crate) fn upstream_scoped(
     let (status, content) = meta.split_once(':').ok_or("UPSTREAM_PROTOCOL")?;
     match status {
         "401" | "403" => Err("UPSTREAM_AUTH"),
+        "402" => Err("UPSTREAM_QUOTA"),
         "429" => Err("UPSTREAM_RATE_LIMIT"),
         "200"
             if content.split(';').next()
@@ -625,11 +673,19 @@ pub(crate) fn provider_evidence(bytes: &[u8], model: &str) -> Pilot<Value> {
         let fields = match event_name {
             "ping" => continue,
             "error" => {
+                let message = data["error"]["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let quota = ["quota", "credit", "balance", "insufficient", "额度", "余额"]
+                    .iter()
+                    .any(|needle| message.contains(needle));
                 return Err(match data["error"]["type"].as_str() {
                     Some("authentication_error" | "permission_error") => "UPSTREAM_AUTH",
                     Some("rate_limit_error") => "UPSTREAM_RATE_LIMIT",
+                    _ if quota => "UPSTREAM_QUOTA",
                     _ => "UPSTREAM_PROVIDER_ERROR",
-                })
+                });
             }
             "message_start" if !started => {
                 if data["message"]["model"].as_str() != Some(model) {
@@ -721,6 +777,7 @@ fn claude_session(
             managed: excluded,
             scope: ProcessScope::Standalone,
         },
+        MODEL,
         prompt,
         send,
     )
@@ -728,6 +785,7 @@ fn claude_session(
 
 pub(crate) fn claude_scoped(
     settings: StageSandbox<'_>,
+    model: &str,
     prompt: &str,
     send: impl FnOnce() -> Pilot<Vec<u8>>,
 ) -> Pilot<(String, Value)> {
@@ -780,7 +838,7 @@ pub(crate) fn claude_scoped(
             "--permission-mode",
             "dontAsk",
             "--model",
-            MODEL,
+            model,
         ])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -823,7 +881,7 @@ pub(crate) fn claude_scoped(
     drop(listener);
     admit(&mut stream, &local_key)?;
     let data = send()?;
-    let provider_usage = provider_evidence(&data, MODEL)?;
+    let provider_usage = provider_evidence(&data, model)?;
     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", data.len())
         .and_then(|()| stream.write_all(&data)).map_err(|_| "GATEWAY_IO")?;
     drop(stream);
@@ -831,7 +889,7 @@ pub(crate) fn claude_scoped(
     if evidence.timed_out || evidence.oversized || evidence.read_error || !child.successful() {
         return Err("CLI_OUTPUT");
     }
-    let output = crate::claude_wire::validate(evidence.bytes.as_slice(), MODEL)?;
+    let output = crate::claude_wire::validate(evidence.bytes.as_slice(), model)?;
     Ok((output, provider_usage))
 }
 
@@ -1616,6 +1674,32 @@ mod tests {
         );
         assert_eq!(
             fallback_model_value(Some("bad model"), "primary"),
+            Err("FALLBACK_MODEL_INVALID")
+        );
+    }
+
+    #[test]
+    fn implement_model_and_fallback_are_validated() {
+        assert_eq!(implement_model_value(None), Ok(MODEL.to_owned()));
+        assert_eq!(
+            implement_model_value(Some("MiniMax-M3")),
+            Ok("MiniMax-M3".to_owned())
+        );
+        assert_eq!(
+            implement_model_value(Some("")),
+            Err("IMPLEMENT_MODEL_INVALID")
+        );
+        assert_eq!(
+            implement_model_value(Some("bad model")),
+            Err("IMPLEMENT_MODEL_INVALID")
+        );
+        assert_eq!(implement_fallback_value(None, MODEL), Ok(None));
+        assert_eq!(
+            implement_fallback_value(Some("MiniMax-M3"), MODEL),
+            Ok(Some("MiniMax-M3".to_owned()))
+        );
+        assert_eq!(
+            implement_fallback_value(Some(MODEL), MODEL),
             Err("FALLBACK_MODEL_INVALID")
         );
     }
