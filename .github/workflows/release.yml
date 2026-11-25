@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -45,7 +45,6 @@ jobs:
       - name: Build app, ZIP, and DMG
         env:
           RELAY_TARGET: aarch64-apple-darwin
-          RELAY_NO_EXEC: "1"
         run: |
           version="${{ steps.version.outputs.version }}"
           out="$RUNNER_TEMP/dist"
@@ -65,8 +64,14 @@ jobs:
           else
             cp CHANGELOG.md "$out/RELEASE_NOTES.md"
           fi
-          (cd "$out" && shasum -a 256 RelayTaskWindow-* AgentRelay-rust.spdx.json RELEASE_NOTES.md > SHA256SUMS)
+          python3 packaging/release/verify-assets.py "$out"
           ls -lah "$out"
+
+      - name: Native arm64 smoke
+        run: |
+          out="$RUNNER_TEMP/dist"
+          version="${{ steps.version.outputs.version }}"
+          packaging/release/smoke-native.sh "$out/RelayTaskWindow.app" "$out/RelayTaskWindow-$version.dmg"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -75,7 +80,7 @@ jobs:
           name: Agent Relay ${{ steps.version.outputs.version }}
           body_path: ${{ runner.temp }}/dist/RELEASE_NOTES.md
           draft: false
-          prerelease: false
+          prerelease: true
           overwrite_files: false
           fail_on_unmatched_files: true
           files: |

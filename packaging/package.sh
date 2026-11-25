@@ -36,17 +36,24 @@ else
   VERSIONS="$("$RELAY/relayctl" version)"
 fi
 printf '%s\n' "$VERSIONS" > "$RELAY/version.json"
+case "$VERSIONS" in
+  *"\"product\":\"$VERSION\""*) ;;
+  *) echo "打包后的 relayctl 版本与 $VERSION 不一致：$VERSIONS" >&2; exit 1 ;;
+esac
 # 清单用相对名，且按所在目录各存一份：回滚时在各自目录内核对
 # （绝对路径在另一台机器上不存在）。
 (cd "$RELAY" && shasum -a 256 relayctl) > "$RELAY/SHA256"
 (cd "$APP/Contents/MacOS" && shasum -a 256 RelayTaskWindow) > "$APP/Contents/MacOS/SHA256"
-NAME="RelayTaskWindow-$VERSION-$BUILD"
+# Stable asset names: a re-run of the same version must not create a second ZIP
+# set. The build ID stays in Info.plist and the manifest, not in the filename.
+NAME="RelayTaskWindow-$VERSION-macos-arm64"
 rm -f "$OUT/$NAME.zip" "$OUT/$NAME.zip.sha256" "$OUT/$NAME.manifest.json"
 (cd "$OUT" && ditto -c -k --keepParent RelayTaskWindow.app "$NAME.zip")
-(cd "$OUT" && shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256")
+ZIP_SHA="$(cd "$OUT" && shasum -a 256 "$NAME.zip" | awk '{print $1}')"
+printf '%s  %s\n' "$ZIP_SHA" "$NAME.zip" > "$OUT/$NAME.zip.sha256"
 cat > "$OUT/$NAME.manifest.json" <<JSON
 {"product": "$VERSION", "build": "$BUILD", "artifact": "$NAME.zip",
- "versions": $VERSIONS, "signed": false, "notarized": false,
+ "sha256": "$ZIP_SHA", "versions": $VERSIONS, "signed": false, "notarized": false,
  "platform": "macOS arm64 (部署目标 14.0)"}
 JSON
 echo "packaged $OUT/$NAME.zip"

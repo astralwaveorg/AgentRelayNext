@@ -34,8 +34,13 @@ After dragging RelayTaskWindow.app to Applications, Control-click the app and
 choose Open, or allow it in System Settings → Privacy & Security. Do not disable
 Gatekeeper globally.
 
-Verify the downloaded DMG SHA-256 against the release notes before opening.
-The app runs locally; it does not install a system daemon or bundle vendor CLIs.
+Verify the downloaded DMG SHA-256 against the sidecar file next to it (or the
+release SHA256SUMS) before opening. The app runs locally; it does not install a
+system daemon or bundle vendor CLIs.
+
+On first launch the app offers to enable the local preview. Enabling creates
+~/.agent-relay-next and registers a LaunchAgent for the current user only; it
+does not modify system settings and it can be disabled again from the app.
 TXT
 rm -f "$OUT"
 /usr/bin/hdiutil create -volname "Agent Relay" -srcfolder "$STAGE" -ov -format UDZO "$OUT" >/dev/null
