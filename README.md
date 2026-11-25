@@ -94,14 +94,15 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 ### 4. Try the offline demo
 
 In the app, choose **Run offline demo**. It creates a synthetic task, runs implementation,
-local verification, independent review, one rework, and manual acceptance. It does not
-call a real model or read your project.
+local verification, independent review, one rework (demo fixture only), and manual
+acceptance. Live project routes run one attempt without automatic rework. The demo does
+not call a real model or read your project.
 
 ## Features
 
 | Area | What you get |
 | --- | --- |
-| Orchestration | Task plan, submission, FIFO serial dispatch, one automatic rework, final human acceptance |
+| Orchestration | Task plan, submission, FIFO serial dispatch, final human acceptance; live routes run one attempt (no auto rework), the offline demo fixture shows one rework |
 | Isolation | Managed detached Git worktree from a fixed commit OID; protected main checkout |
 | Verification | Fixed executable/argv, no shell, cleared environment, bounded output and timeout |
 | Independent review | Different tool and normalized model; read-only review input; digest-bound report |

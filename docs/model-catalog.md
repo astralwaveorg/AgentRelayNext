@@ -17,8 +17,8 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 
 | ID | 工具 | 角色 | 能力 | 费用类别 | 生产 |
 | --- | --- | --- | --- | --- | --- |
-| `minimax/MiniMax-M3.1-Flash` | Claude Code | 实现 | 读/写文件 | existing_subscription | 是 |
-| `opencode-go/deepseek-v4.1-flash`（别名 `deepseek-v4.1-flash`） | OpenCode Go | 只读评审 | 读文件 | existing_subscription | 是 |
+| `minimax/MiniMax-M3.1-Flash` | Claude Code | 实现 | 读/写文件 | existing_subscription | 否（预览） |
+| `opencode-go/deepseek-v4.1-flash`（别名 `deepseek-v4.1-flash`） | OpenCode Go | 只读评审 | 读文件 | existing_subscription | 否（预览） |
 
 评审模型可用 `RELAY_GO_MODEL` 覆盖为同一工具下你已启用的模型；approval 绑定实际模型，且覆盖值不得与实现模型相同。目录条目不因覆盖而改变。
 | `offline/fake-implementer-v1` | 本地 fake | 实现 | 读/写文件 | free_tier | 否 |
@@ -26,7 +26,7 @@ relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayc
 
 ## 推荐规则
 
-1. 只考虑 `verified=true` 且 `production=true` 的条目。
+1. 只考虑 `verified=true` 的条目；真实账户证据（B1–B5）完成前，推荐结果一律 `production_ready=false`、`preview_only=true`、`max_rework=0`。`verified` 只表示本机兼容性，不代表账户、额度或生产可用。
 2. 实现角色必须声明 `edit_files`；评审只能声明 `read_files`。
 3. 实现者与评审者工具不同；归一化 ID 或别名相同不算独立。
 4. 枚举完整组合，按目录顺序取第一个满足条件的组合；相同输入和目录快照结果一致。

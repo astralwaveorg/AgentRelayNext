@@ -20,7 +20,10 @@ fn entries() -> Value {
             "capabilities":["read_files","edit_files"],
             "cost":"existing_subscription",
             "verified":true,
-            "production":true,
+            "production":false,
+            "production_ready":false,
+            "evidence_level":"local_preview",
+            "observed_at":"2026-11-24",
             "source":"本机真实路线预览与 Claude Code 受限写入夹具",
             "notes":"M Plan Credits 可能被使用；供应商扣费归属没有可靠回传，记 unverified。"
         },
@@ -33,7 +36,10 @@ fn entries() -> Value {
             "capabilities":["read_files"],
             "cost":"existing_subscription",
             "verified":true,
-            "production":true,
+            "production":false,
+            "production_ready":false,
+            "evidence_level":"local_preview",
+            "observed_at":"2026-11-24",
             "source":"本机 OpenCode Go 网关与供应商响应核对",
             "notes":"必须核对 provider_reported_source 为 go/go-plus 且余额扣费为 0。"
         },
@@ -109,7 +115,6 @@ pub fn recommend() -> Value {
         .copied()
         .filter(|e| {
             e["verified"] == true
-                && e["production"] == true
                 && e["roles"]
                     .as_array()
                     .is_some_and(|r| r.iter().any(|v| v == "implement"))
@@ -123,7 +128,6 @@ pub fn recommend() -> Value {
         .copied()
         .filter(|e| {
             e["verified"] == true
-                && e["production"] == true
                 && e["roles"]
                     .as_array()
                     .is_some_and(|r| r.iter().any(|v| v == "review"))
@@ -153,8 +157,10 @@ pub fn recommend() -> Value {
                     "provider": review["provider"], "cost": review["cost"],
                     "verified": review["verified"], "notes": review["notes"]},
                 "independence": {"different_tool": true, "different_model": true},
-                "reason": "实现者可写、评审者只读，工具和归一化模型身份均不同；代理由 Relay 监管。",
-                "max_rework": 1,
+                "reason": "实现者可写、评审者只读，工具和归一化模型身份均不同；真实账户证据完成前为预览推荐。",
+                "production_ready": false,
+                "preview_only": true,
+                "max_rework": 0,
                 "fallback": false
             });
         }
@@ -162,7 +168,9 @@ pub fn recommend() -> Value {
     json!({
         "schema_version": 1,
         "status": "no_verified_pair",
-        "reason": "没有同时满足实现/只读评审、工具与模型独立性、已验证生产标记的组合。",
+        "production_ready": false,
+        "preview_only": true,
+        "reason": "没有同时满足实现/只读评审、工具与模型独立性的已验证组合。",
         "action": "check_native_plans"
     })
 }
@@ -209,6 +217,9 @@ mod tests {
         assert_ne!(first["implement"]["tool"], first["review"]["tool"]);
         assert_ne!(first["implement"]["id"], first["review"]["id"]);
         assert_eq!(first["template"], "implement_review");
+        assert_eq!(first["production_ready"], false);
+        assert_eq!(first["preview_only"], true);
+        assert_eq!(first["max_rework"], 0);
     }
 
     #[test]
