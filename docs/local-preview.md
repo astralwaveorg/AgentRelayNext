@@ -13,6 +13,17 @@
 - MCP 桥：`relayctl mcp --socket "$HOME/.agent-relay-next/instance/relay.sock"`。试用安装不修改现有客户端配置。
 - 暂停后台服务：`launchctl bootout "gui/$(id -u)/net.relay.candidate.local-preview"`；重新启动时对对应的 plist 运行 `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/net.relay.candidate.local-preview.plist"`。这两步不删除数据。
 
+已安装的 App 可直接启用本机服务，无需源码或手工编辑 plist：
+
+```sh
+relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayctl"
+"$relayctl" local-preview status    # not_configured / configured_not_running / starting / running / unhealthy
+"$relayctl" local-preview enable    # 创建实例、安装包装脚本、注册当前用户 LaunchAgent，并跑 doctor + MCP 握手
+"$relayctl" local-preview disable   # 停止并移除本次注册，默认保留 ~/.agent-relay-next 数据
+```
+
+`enable` 只接受物理路径，拒绝符号链接与超过 SUN_LEN 的 socket 路径；LaunchAgent label 默认 `net.relay.candidate.local-preview`，可用 `RELAY_PREVIEW_LABEL` 在隔离验收中改成唯一的 `net.relay.candidate.local-preview.*`。失败时会撤销本次创建的 plist 并保留实例目录供诊断。
+
 从本地构建产物首次安装：运行 `packaging/package.sh <绝对输出目录>`，再把生成的 ZIP 路径传给 `packaging/install-local-preview.sh`。安装器核对摘要，拒绝覆盖现有应用或数据。对正在运行的试用实例，先关闭任务窗口并暂停其他客户端的提交，等排队与运行任务处理完毕。使用 `packaging/upgrade-local-preview.sh <新版 ZIP>` 升级。它要求产品版本不同、业务协议与 wire 相同；数据库支持同 schema，或由候选明确支持的 v8 → v9；有排队或运行任务、退出未确认，或者制品摘要不一致时，升级会停止。0.1.0 不识别维护标记，首次升级前尤其要暂停外部提交。0.1.1 会识别维护标记，升级期间拒绝写请求和领取任务，同时保留读取。
 
 升级保留原实例和任务历史，并把原应用、经检查的 SQLite 一致快照及已登记制品放入命令输出的私有备份目录。候选先在维护状态通过 MCP 握手、版本检查和 doctor，才恢复提交。若候选启动或检查失败，安装器尝试恢复原应用和服务，并保留失败现场。跨 schema 时先迁移独立数据库，校验历史，再用同文件系统的原子交换替换活动数据库。候选启动失败会换回原库与原应用；如果看到“自动恢复未通过”或遗留升级锁，保留锁、维护标记和备份，避免重复执行。强杀升级器和真实断电尚未验证；签名公证、公开分发和把档案重新投入生产不在本命令范围中。
