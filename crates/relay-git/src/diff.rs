@@ -9,12 +9,22 @@
 //! 追加。全程只读：不改主 checkout、不改任何 index；diff 关闭外部
 //! 差异程序与重命名检测（重命名表现为删除/新增，两侧分别合规）。
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::io::Read;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use crate::git_layer::{git_out, git_raw, git_stdin};
+use crate::git_layer::{git_raw_bounded, GitOutput};
 use crate::scope::WriteScope;
 use crate::GitCheckError;
+
+/// 首版资源上限（06）：超限一律 fail closed，不返回部分补丁。
+pub const MAX_DIFF_FILE_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_DIFF_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_DIFF_PATCH_BYTES: usize = 16 * 1024 * 1024;
+const COLLECT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// 变化动作。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +69,12 @@ pub struct Rejections {
     pub binaries: Vec<String>,
     /// 文件模式变化（如 100644 → 100755）。
     pub mode_changes: Vec<String>,
+    /// 不支持的普通文件类型（FIFO、socket、device，或打开时类型竞态）。
+    pub unsupported_files: Vec<String>,
+    /// 超过单文件或总字节上限。
+    pub oversized_files: Vec<String>,
+    /// Git 输出或采集总期限等资源上限。
+    pub resource_limits: Vec<String>,
 }
 
 impl fmt::Display for Rejections {
@@ -107,6 +123,18 @@ impl fmt::Display for Rejections {
         if !self.mode_changes.is_empty() {
             sep(f)?;
             write!(f, "文件模式变化：{}", list(&self.mode_changes))?;
+        }
+        if !self.unsupported_files.is_empty() {
+            sep(f)?;
+            write!(f, "不支持的文件类型：{}", list(&self.unsupported_files))?;
+        }
+        if !self.oversized_files.is_empty() {
+            sep(f)?;
+            write!(f, "超过文件大小上限：{}", list(&self.oversized_files))?;
+        }
+        if !self.resource_limits.is_empty() {
+            sep(f)?;
+            write!(f, "资源上限：{}", list(&self.resource_limits))?;
         }
         Ok(())
     }
@@ -172,12 +200,13 @@ pub fn collect_diff(
     base_oid: &str,
     scope: &WriteScope,
 ) -> Result<CollectedDiff, DiffError> {
+    let deadline = Instant::now() + COLLECT_DEADLINE;
     // 1. 跟踪变化（相对固定基线；关闭重命名检测与外部差异程序）。
     //    base↔worktree 是最终差异的权威来源（staged 后又恢复为基线字节
     //    的路径不产生幽灵条目）；base↔index 仅用于拒绝性检查——只存在
     //    于 index 的 Gitlink/符号链接仍要拒绝，但 index 中的旧文本变化
     //    不并入最终清单。
-    let worktree_side = git_out(
+    let worktree_side = git_text(
         worktree,
         &[
             "-c",
@@ -190,8 +219,9 @@ pub fn collect_diff(
             "-z",
             base_oid,
         ],
+        deadline,
     )?;
-    let index_side = git_out(
+    let index_side = git_text(
         worktree,
         &[
             "-c",
@@ -205,6 +235,7 @@ pub fn collect_diff(
             "-z",
             base_oid,
         ],
+        deadline,
     )?;
     let listings = [worktree_side, index_side];
     let mut tracked: Vec<RawChange> = Vec::new();
@@ -243,11 +274,12 @@ pub fn collect_diff(
     }
 
     // 2. 新增文件：未跟踪（标准）与被忽略。
-    let others = git_out(
+    let others = git_text(
         worktree,
         &["ls-files", "--others", "--exclude-standard", "-z"],
+        deadline,
     )?;
-    let ignored = git_out(
+    let ignored = git_text(
         worktree,
         &[
             "ls-files",
@@ -256,6 +288,7 @@ pub fn collect_diff(
             "--exclude-standard",
             "-z",
         ],
+        deadline,
     )?;
     let mut added_paths: Vec<String> = Vec::new();
     for listing in [others, ignored] {
@@ -267,14 +300,10 @@ pub fn collect_diff(
     }
 
     // 3. 授权与安全检查（逐实际路径；只收集路径，不读越权内容）。
-    let mut rejections = Rejections {
-        unauthorized: Vec::new(),
-        invalid_paths: Vec::new(),
-        symlinks: Vec::new(),
-        gitlinks: Vec::new(),
-        binaries: Vec::new(),
-        mode_changes: Vec::new(),
-    };
+    //    文件按 lstat → O_NOFOLLOW/O_NONBLOCK 打开 → fstat → 有界读取，
+    //    特殊类型与超限在读取前拒绝；新增文件字节只读一次并复用到补丁。
+    let mut rejections = empty_rejections();
+    let mut budget = MAX_DIFF_TOTAL_BYTES;
     // 仅存在于 index 的条目：Gitlink/符号链接仍拒绝；其余（如已暂存又
     // 恢复为基线字节的旧文本变化）不并入最终清单。
     for change in &staged_only {
@@ -305,31 +334,39 @@ pub fn collect_diff(
                     rejections.mode_changes.push(change.path.clone());
                     continue;
                 }
-                let bytes = match fs_bytes(worktree, &change.path) {
-                    Some(bytes) => bytes,
-                    None => continue,
-                };
-                if looks_binary(&bytes) {
-                    rejections.binaries.push(change.path.clone());
+                match read_regular_file(&worktree.join(&change.path), &mut budget)
+                    .map_err(DiffError::from)?
+                {
+                    FileRead::Bytes { bytes, .. } => {
+                        if looks_binary(&bytes) {
+                            rejections.binaries.push(change.path.clone());
+                        }
+                    }
+                    FileRead::Missing => {}
+                    FileRead::Symlink => rejections.symlinks.push(change.path.clone()),
+                    FileRead::Unsupported => rejections.unsupported_files.push(change.path.clone()),
+                    FileRead::Oversized => rejections.oversized_files.push(change.path.clone()),
                 }
             }
         }
     }
+    let mut added_bytes: BTreeMap<String, (Vec<u8>, bool)> = BTreeMap::new();
     for path in &added_paths {
         if authorize(scope, path, &mut rejections).is_err() {
             continue;
         }
-        let bytes = match fs_bytes(worktree, path) {
-            Some(bytes) => bytes,
-            None => continue,
-        };
-        let meta = std::fs::symlink_metadata(worktree.join(path)).map_err(DiffError::from)?;
-        if meta.is_symlink() {
-            rejections.symlinks.push(path.clone());
-            continue;
-        }
-        if looks_binary(&bytes) {
-            rejections.binaries.push(path.clone());
+        match read_regular_file(&worktree.join(path), &mut budget).map_err(DiffError::from)? {
+            FileRead::Bytes { bytes, executable } => {
+                if looks_binary(&bytes) {
+                    rejections.binaries.push(path.clone());
+                } else {
+                    added_bytes.insert(path.clone(), (bytes, executable));
+                }
+            }
+            FileRead::Missing => {}
+            FileRead::Symlink => rejections.symlinks.push(path.clone()),
+            FileRead::Unsupported => rejections.unsupported_files.push(path.clone()),
+            FileRead::Oversized => rejections.oversized_files.push(path.clone()),
         }
     }
     if !rejections.unauthorized.is_empty()
@@ -338,6 +375,9 @@ pub fn collect_diff(
         || !rejections.gitlinks.is_empty()
         || !rejections.binaries.is_empty()
         || !rejections.mode_changes.is_empty()
+        || !rejections.unsupported_files.is_empty()
+        || !rejections.oversized_files.is_empty()
+        || !rejections.resource_limits.is_empty()
     {
         return Err(DiffError::Rejected(Box::new(rejections)));
     }
@@ -379,23 +419,34 @@ pub fn collect_diff(
             "--",
         ];
         args.extend(tracked_only.iter().copied());
+        let out = bounded(worktree, &args, None, deadline)?;
+        require_ok(&out, &args)?;
         // 补丁取原始 stdout：保留末尾换行、行尾空格与 Tab，不做 trim。
-        let (ok, _code, stdout, stderr) = git_raw(worktree, &args)?;
-        if !ok {
-            return Err(DiffError::Git(GitCheckError::CommandFailed {
-                argv: format!("git {}", args.join(" ")),
-                stderr: crate::git_layer::truncate(&stderr),
-            }));
-        }
-        patch.push_str(&stdout);
+        patch.push_str(&String::from_utf8_lossy(&out.stdout));
     }
     let mut synthesized_adds: Vec<&String> = added_paths.iter().collect();
     synthesized_adds.sort();
     for path in synthesized_adds {
+        let Some((bytes, executable)) = added_bytes.get(path) else {
+            continue;
+        };
         if !patch.is_empty() && !patch.ends_with('\n') {
             patch.push('\n');
         }
-        patch.push_str(&new_file_hunk(worktree, path)?);
+        patch.push_str(&new_file_hunk(
+            worktree,
+            path,
+            bytes,
+            *executable,
+            deadline,
+        )?);
+    }
+    if patch.len() > MAX_DIFF_PATCH_BYTES {
+        return Err(limit_error(format!(
+            "补丁 {} 字节超过上限 {}",
+            patch.len(),
+            MAX_DIFF_PATCH_BYTES
+        )));
     }
 
     Ok(CollectedDiff { patch, changes })
@@ -416,21 +467,122 @@ fn authorize(scope: &WriteScope, path: &str, rejections: &mut Rejections) -> Res
     }
 }
 
-/// 读取 worktree 内文件字节；不存在（删除/竞态）返回 None。
-fn fs_bytes(worktree: &Path, rel: &str) -> Option<Vec<u8>> {
-    std::fs::read(worktree.join(rel)).ok()
+fn empty_rejections() -> Rejections {
+    Rejections {
+        unauthorized: Vec::new(),
+        invalid_paths: Vec::new(),
+        symlinks: Vec::new(),
+        gitlinks: Vec::new(),
+        binaries: Vec::new(),
+        mode_changes: Vec::new(),
+        unsupported_files: Vec::new(),
+        oversized_files: Vec::new(),
+        resource_limits: Vec::new(),
+    }
+}
+
+fn limit_error(what: impl Into<String>) -> DiffError {
+    let mut rejections = empty_rejections();
+    rejections.resource_limits.push(what.into());
+    DiffError::Rejected(Box::new(rejections))
+}
+
+/// 在采集总时限内执行 git；超时、输出超限与启动失败都不返回可用的
+/// 部分数据（调用方 fail closed）。
+fn bounded(
+    worktree: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    deadline: Instant,
+) -> Result<GitOutput, DiffError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining <= Duration::from_millis(1) {
+        return Err(limit_error(format!("git {}（采集总时限）", args.join(" "))));
+    }
+    let out = git_raw_bounded(worktree, args, input, remaining).map_err(DiffError::from)?;
+    if out.timed_out || out.overflow {
+        return Err(limit_error(format!("git {}", args.join(" "))));
+    }
+    Ok(out)
+}
+
+fn require_ok(out: &GitOutput, args: &[&str]) -> Result<(), DiffError> {
+    if out.ok {
+        return Ok(());
+    }
+    Err(DiffError::Git(GitCheckError::CommandFailed {
+        argv: format!("git {}", args.join(" ")),
+        stderr: crate::git_layer::truncate(&String::from_utf8_lossy(&out.stderr)),
+    }))
+}
+
+fn git_text(worktree: &Path, args: &[&str], deadline: Instant) -> Result<String, DiffError> {
+    let out = bounded(worktree, args, None, deadline)?;
+    require_ok(&out, args)?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
+}
+
+/// 安全读取结果：特殊类型与超限都不读取内容。
+enum FileRead {
+    Bytes { bytes: Vec<u8>, executable: bool },
+    Missing,
+    Symlink,
+    Unsupported,
+    Oversized,
+}
+
+/// lstat → O_NOFOLLOW/O_NONBLOCK 打开 → fstat → 有界读取。FIFO、socket、
+/// device、符号链接与打开时的类型竞态一律拒绝；单文件与总字节上限在
+/// 读取前检查，读取用 `take(limit + 1)` 防止内存失控。
+fn read_regular_file(path: &Path, budget: &mut u64) -> std::io::Result<FileRead> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(FileRead::Missing),
+        Err(error) => return Err(error),
+    };
+    if meta.file_type().is_symlink() {
+        return Ok(FileRead::Symlink);
+    }
+    if !meta.is_file() {
+        return Ok(FileRead::Unsupported);
+    }
+    if meta.len() > MAX_DIFF_FILE_BYTES || meta.len() > *budget {
+        return Ok(FileRead::Oversized);
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Ok(FileRead::Unsupported);
+    }
+    if meta.len() > MAX_DIFF_FILE_BYTES || meta.len() > *budget {
+        return Ok(FileRead::Oversized);
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(MAX_DIFF_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DIFF_FILE_BYTES {
+        return Ok(FileRead::Oversized);
+    }
+    *budget = budget.saturating_sub(bytes.len() as u64);
+    let executable = meta.permissions().mode() & 0o111 != 0;
+    Ok(FileRead::Bytes { bytes, executable })
 }
 
 /// 为新增文件合成 new file hunk（blob 哈希用 `git hash-object --stdin`
-/// 计算，不带 -w，不写对象库）。
-fn new_file_hunk(worktree: &Path, rel: &str) -> Result<String, DiffError> {
-    let bytes = std::fs::read(worktree.join(rel)).map_err(DiffError::from)?;
-    let hash = git_stdin(
-        worktree,
-        &["hash-object", "--stdin"],
-        &String::from_utf8_lossy(&bytes),
-    )?;
-    let text = String::from_utf8(bytes).map_err(|_| {
+/// 计算，不带 -w，不写对象库）。字节来自采集阶段，只读一次。
+fn new_file_hunk(
+    worktree: &Path,
+    rel: &str,
+    bytes: &[u8],
+    executable: bool,
+    deadline: Instant,
+) -> Result<String, DiffError> {
+    let out = bounded(worktree, &["hash-object", "--stdin"], Some(bytes), deadline)?;
+    require_ok(&out, &["hash-object", "--stdin"])?;
+    let hash = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    let text = std::str::from_utf8(bytes).map_err(|_| {
         DiffError::Git(GitCheckError::UnexpectedOutput {
             detail: format!("新增文件 {rel} 在补丁阶段出现非 UTF-8 内容"),
         })
@@ -438,13 +590,14 @@ fn new_file_hunk(worktree: &Path, rel: &str) -> Result<String, DiffError> {
     // 按 \n 手工切分：保留行内的 \r（CRLF）与行尾空格/Tab；末段为空
     // 说明以换行结尾，否则补 "\ No newline at end of file"。
     let segments: Vec<&str> = {
-        let stripped = text.strip_suffix('\n').unwrap_or(&text);
+        let stripped = text.strip_suffix('\n').unwrap_or(text);
         let segments: Vec<&str> = stripped.split('\n').collect();
         segments
     };
     let line_count = segments.len();
+    let mode = if executable { "100755" } else { "100644" };
     let mut hunk = format!(
-        "diff --git a/{rel} b/{rel}\nnew file mode 100644\nindex 0000000..{hash}\n--- /dev/null\n+++ b/{rel}\n"
+        "diff --git a/{rel} b/{rel}\nnew file mode {mode}\nindex 0000000..{hash}\n--- /dev/null\n+++ b/{rel}\n"
     );
     if line_count == 1 && segments[0].is_empty() {
         hunk.push_str("@@ -0,0 +0,0 @@\n");
@@ -461,4 +614,65 @@ fn new_file_hunk(worktree: &Path, rel: &str) -> Result<String, DiffError> {
         hunk.push_str("\\ No newline at end of file\n");
     }
     Ok(hunk)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::FileTypeExt;
+    use std::process::Command;
+
+    fn unit_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "relay-diff-unit-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn fifo_is_rejected_before_content_read() {
+        let dir = unit_dir("fifo");
+        let fifo = dir.join("pipe");
+        assert!(Command::new("mkfifo")
+            .arg("-m")
+            .arg("600")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::fs::symlink_metadata(&fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo());
+        let mut budget = MAX_DIFF_TOTAL_BYTES;
+        let started = Instant::now();
+        match read_regular_file(&fifo, &mut budget).unwrap() {
+            FileRead::Unsupported => {}
+            _ => panic!("FIFO 必须按不支持类型拒绝"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "FIFO 不得阻塞读取"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn zero_budget_marks_oversized_without_reading() {
+        let dir = unit_dir("budget");
+        let file = dir.join("small.txt");
+        std::fs::write(&file, "hello\n").unwrap();
+        let mut budget = 0u64;
+        match read_regular_file(&file, &mut budget).unwrap() {
+            FileRead::Oversized => {}
+            _ => panic!("总预算耗尽必须拒绝"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

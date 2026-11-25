@@ -432,3 +432,68 @@ fn ghost_staged_change_restored_to_base_is_dropped() {
 
     remove_dir(&dir);
 }
+
+/// A4：超过单文件上限的稀疏文件立即拒绝，不读取内容、不 OOM。
+#[test]
+fn oversized_sparse_file_is_rejected() {
+    let dir = temp_dir("a4-sparse");
+    let root = init_repo(&dir);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    let report = create_worktree(&root, &dir.join("managed"), "task_sparse", 1, &head).unwrap();
+    let wt = &report.path;
+    let scope = WriteScope::new(&["a.txt", "big.bin"]).unwrap();
+    let file = fs::File::create(wt.join("big.bin")).unwrap();
+    file.set_len(relay_git::diff::MAX_DIFF_FILE_BYTES + 1)
+        .unwrap();
+    drop(file);
+    let error = collect_diff(wt, &head, &scope).unwrap_err();
+    match error {
+        relay_git::DiffError::Rejected(rejections) => assert!(
+            rejections.oversized_files.contains(&"big.bin".to_owned()),
+            "{rejections:?}"
+        ),
+        other => panic!("expected rejection: {other:?}"),
+    }
+    remove_dir(&dir);
+}
+
+/// A4：新增可执行文件的 mode 保留为 100755，应用后执行位仍在。
+#[test]
+fn added_executable_file_keeps_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("a4-exec");
+    let root = init_repo(&dir);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    let report = create_worktree(&root, &dir.join("managed"), "task_exec", 1, &head).unwrap();
+    let wt = &report.path;
+    let scope = WriteScope::new(&["a.txt", "run.sh"]).unwrap();
+    let script = wt.join("run.sh");
+    fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let collected = collect_diff(wt, &head, &scope).unwrap();
+    assert!(
+        collected.patch.contains("new file mode 100755"),
+        "{}",
+        collected.patch
+    );
+    let clean = dir.join("clean");
+    git_out(
+        &root,
+        &[
+            "clone",
+            "-q",
+            "--no-local",
+            root.to_str().unwrap(),
+            clean.to_str().unwrap(),
+        ],
+    );
+    let patch_file = dir.join("exec.patch");
+    fs::write(&patch_file, &collected.patch).unwrap();
+    git_out(&clean, &["apply", patch_file.to_str().unwrap()]);
+    let mode = fs::metadata(clean.join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_ne!(mode & 0o111, 0, "执行位应在应用后保留");
+    remove_dir(&dir);
+}

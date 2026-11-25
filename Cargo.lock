@@ -224,6 +224,7 @@ dependencies = [
 name = "relay-git"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "relay-sys",
  "serde_json",
  "sha2",

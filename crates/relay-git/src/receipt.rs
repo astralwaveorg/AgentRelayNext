@@ -401,13 +401,16 @@ fn serialize_receipt(
     };
     let post_rejections = match &receipt.post_rejections {
         Some(r) => format!(
-            "{{\"unauthorized\":{},\"invalid_paths\":{},\"symlinks\":{},\"gitlinks\":{},\"binaries\":{},\"mode_changes\":{}}}",
+            "{{\"unauthorized\":{},\"invalid_paths\":{},\"symlinks\":{},\"gitlinks\":{},\"binaries\":{},\"mode_changes\":{},\"unsupported_files\":{},\"oversized_files\":{},\"resource_limits\":{}}}",
             json_array(&r.unauthorized),
             json_array(&r.invalid_paths),
             json_array(&r.symlinks),
             json_array(&r.gitlinks),
             json_array(&r.binaries),
-            json_array(&r.mode_changes)
+            json_array(&r.mode_changes),
+            json_array(&r.unsupported_files),
+            json_array(&r.oversized_files),
+            json_array(&r.resource_limits)
         ),
         None => "null".to_owned(),
     };

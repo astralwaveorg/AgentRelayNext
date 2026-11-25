@@ -13,8 +13,17 @@
 //! 子命令只读：不执行 hooks、不触发 clean/smudge 过滤器、不联网补
 //! 对象、不创建 worktree、不写 index。
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Upper bound for a single git command's stdout. Exceeding it fails closed
+/// (the child is killed, the caller receives `overflow`), never truncating a
+/// patch into a partial candidate.
+pub(crate) const MAX_GIT_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+/// stderr is diagnostic only; keep it small.
+pub(crate) const MAX_GIT_STDERR_BYTES: usize = 64 * 1024;
 
 /// 构建经环境加固的 git `Command`（仅构建，不执行）。
 pub(crate) fn git_command(root: &Path, args: &[&str]) -> Command {
@@ -37,6 +46,98 @@ pub(crate) fn git_command(root: &Path, args: &[&str]) -> Command {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
     command
+}
+
+/// 有界 git 执行结果：输出超过上限或等待超时都不返回部分数据供使用。
+pub(crate) struct GitOutput {
+    pub(crate) ok: bool,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) overflow: bool,
+    pub(crate) timed_out: bool,
+}
+
+fn read_capped(mut reader: impl Read, limit: usize) -> (Vec<u8>, bool) {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return (buffer, false),
+            Ok(n) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                if buffer.len() > limit {
+                    buffer.truncate(limit);
+                    return (buffer, true);
+                }
+            }
+            Err(_) => return (buffer, true),
+        }
+    }
+}
+
+/// Run git with bounded stdout/stderr, an optional stdin payload, and a
+/// deadline. Overflow or timeout kills the child and sets the corresponding
+/// flag; callers must treat either flag as a hard failure.
+pub(crate) fn git_raw_bounded(
+    root: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<GitOutput, crate::GitCheckError> {
+    use std::io::Write;
+    let mut command = git_command(root, args);
+    command
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| crate::GitCheckError::GitInvocation(format!("无法启动 git：{e}")))?;
+    if let Some(bytes) = input {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(bytes);
+        }
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| crate::GitCheckError::GitInvocation("git stdout 不可用".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| crate::GitCheckError::GitInvocation("git stderr 不可用".into()))?;
+    let out_reader = std::thread::spawn(move || read_capped(stdout, MAX_GIT_OUTPUT_BYTES));
+    let err_reader = std::thread::spawn(move || read_capped(stderr, MAX_GIT_STDERR_BYTES));
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                timed_out = true;
+                break None;
+            }
+        }
+    };
+    let (stdout, out_overflow) = out_reader.join().unwrap_or_default();
+    let (stderr, err_overflow) = err_reader.join().unwrap_or_default();
+    let ok = status.is_some_and(|status| status.success());
+    Ok(GitOutput {
+        ok,
+        stdout,
+        stderr,
+        overflow: out_overflow || err_overflow,
+        timed_out,
+    })
 }
 
 /// 运行 git 并返回原始结果：(成功与否, 退出码, stdout, stderr)。
@@ -95,39 +196,6 @@ pub(crate) fn truncate(text: &str) -> String {
         }
         format!("{}…[截断]", &text[..end])
     }
-}
-
-/// 带标准输入的 git 调用（如 `hash-object --stdin`，不写对象库）。
-pub(crate) fn git_stdin(
-    root: &Path,
-    args: &[&str],
-    input: &str,
-) -> Result<String, crate::GitCheckError> {
-    use std::io::Write;
-    let mut child = git_command(root, args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| crate::GitCheckError::GitInvocation(format!("无法启动 git：{e}")))?;
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin 已设为 piped")
-        .write_all(input.as_bytes())
-        .map_err(|e| crate::GitCheckError::GitInvocation(format!("无法写入 stdin：{e}")))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|e| crate::GitCheckError::GitInvocation(format!("git 执行失败：{e}")))?;
-    if !output.status.success() {
-        return Err(crate::GitCheckError::CommandFailed {
-            argv: format!("git {}", args.join(" ")),
-            stderr: truncate(&String::from_utf8_lossy(&output.stderr)),
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .trim_end()
-        .to_owned())
 }
 
 #[cfg(test)]
