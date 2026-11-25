@@ -143,8 +143,6 @@ field() { read_plist "$2" "$1"; }
 
 # 0.1.0 不识别标记。首次升级时需先关闭任务窗口且暂停其他客户端提交。
 # 后续版本进入维护后，连接级写命令和后台领取都会暂停。
-(set -o noclobber; : > "$FROZEN") || fail "维护标记已存在，保留现场"
-frozen=1
 "$NEXT/$BIN" maintenance check-idle --instance-dir "$INST" > "$stage/current.json"
 for field_name in business wire; do
   [ "$(field "$stage/current.json" "$field_name")" = "$(field "$stage/version.json" "$field_name")" ] ||
@@ -160,6 +158,16 @@ fi
 
 stop_service || fail "试用服务未在期限内停止，保留现场：$INST"
 stopped=1
+# 停服后复查：期间不排除有客户端刚好提交；确认空闲后再置维护标记，
+# 避免"先置标记、后在途写"的窗口。
+active="$(/usr/bin/sqlite3 "$INST/relay.sqlite3" "SELECT
+  (SELECT count(*) FROM tasks WHERE state IN
+      ('queued','preparing','launching','running','verifying','cancelling')) +
+  (SELECT count(*) FROM dispatch_gate WHERE state='pending') +
+  (SELECT count(*) FROM managed_groups WHERE state IN ('tracking','blocking'));")"
+[ "$active" = "0" ] || fail "停服后仍有活动任务（$active），保留现场：$INST"
+(set -o noclobber; : > "$FROZEN") || fail "维护标记已存在，保留现场"
+frozen=1
 backup="$(mktemp -d "$DEST/.relay-backup.XXXXXX")"
 # Socket removal precedes the daemon's final lock release; retry the snapshot
 # only on lock contention, and fail immediately on any other error.
