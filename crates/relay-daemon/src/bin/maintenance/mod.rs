@@ -569,6 +569,44 @@ fn prune(
     } else {
         Vec::new()
     };
+    // Scratch directories no attempt references after it ends: review
+    // copies, per-implementation Claude sandboxes and staged artifacts.
+    // Prune holds the instance lock, so no task can be using them.
+    let mut scratch_paths: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&managed) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "review" || name.starts_with(".claude-implement-") {
+                let path = entry.path();
+                if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir() && !meta.is_symlink())
+                {
+                    scratch_paths.push(path);
+                }
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(&artifacts_root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(".staging-") {
+                let path = entry.path();
+                if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir() && !meta.is_symlink())
+                {
+                    scratch_paths.push(path);
+                }
+            }
+        }
+    }
+    let mut scratch_dirs = 0u64;
+    for path in scratch_paths {
+        let size = dir_size(&path);
+        bytes = bytes.saturating_add(size);
+        entries.push(json!({"kind":"scratch","path":path,"bytes":size}));
+        scratch_dirs += 1;
+        if apply {
+            fs::remove_dir_all(&path)?;
+        }
+    }
     let mut metadata_removed = 0u64;
     if apply && !metadata_candidates.is_empty() {
         let tx = conn.transaction()?;
@@ -621,6 +659,7 @@ fn prune(
         "metadata_candidates": metadata_candidates.len(),
         "metadata_tasks_removed": metadata_removed,
         "entries": entries,
+        "scratch_dirs": scratch_dirs,
         "estimated_bytes": bytes,
         "expired_plans_removed": if apply { plans } else { 0 },
     }))
