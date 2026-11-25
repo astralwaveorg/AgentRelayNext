@@ -639,7 +639,11 @@ pub fn start_with_config(
     }
     // 持久归属记录：本实例创建的凭据（重启时据此确认可回收）。
     let own_path = socket_own_record_path(instance_dir);
-    fs::write(&own_path, format!("{}:{}", sock_meta.dev(), sock_meta.ino())).map_err(|e| {
+    fs::write(
+        &own_path,
+        format!("{}:{}", sock_meta.dev(), sock_meta.ino()),
+    )
+    .map_err(|e| {
         let _ = fs::remove_file(&socket_path);
         DaemonError::PathRead {
             path: own_path.clone(),

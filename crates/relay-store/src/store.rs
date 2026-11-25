@@ -2002,7 +2002,7 @@ fn verify_schema(conn: &Connection) -> Result<(), StoreError> {
             .query_map([], |row| row.get(1))?
             .collect::<Result<_, _>>()?;
         for column in columns {
-            if !actual.iter().any(|name| *name == column) {
+            if !actual.contains(&column) {
                 return Err(StoreError::Environment(format!(
                     "实例数据库表 {table} 缺列 {column}"
                 )));
