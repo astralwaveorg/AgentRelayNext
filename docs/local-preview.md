@@ -15,7 +15,9 @@
 
 从本地构建产物首次安装：运行 `packaging/package.sh <绝对输出目录>`，再把生成的 ZIP 路径传给 `packaging/install-local-preview.sh`。安装器核对摘要，拒绝覆盖现有应用或数据。对正在运行的试用实例，先关闭任务窗口并暂停其他客户端的提交，等排队与运行任务处理完毕。使用 `packaging/upgrade-local-preview.sh <新版 ZIP>` 升级。它要求产品版本不同、业务协议与 wire 相同；数据库支持同 schema，或由候选明确支持的 v8 → v9；有排队或运行任务、退出未确认，或者制品摘要不一致时，升级会停止。0.1.0 不识别维护标记，首次升级前尤其要暂停外部提交。0.1.1 会识别维护标记，升级期间拒绝写请求和领取任务，同时保留读取。
 
-升级保留原实例和任务历史，并把原应用、经检查的 SQLite 一致快照及已登记制品放入命令输出的私有备份目录。候选先在维护状态通过 MCP 握手、版本检查和 doctor，才恢复提交。若候选启动或检查失败，安装器尝试恢复原应用和服务，并保留失败现场。跨 schema 时先迁移独立数据库，校验历史，再用同文件系统的原子交换替换活动数据库。候选启动失败会换回原库与原应用；如果看到“自动恢复未通过”或遗留升级锁，保留锁、维护标记和备份，避免重复执行。强杀升级器和真实断电尚未验证；签名公证、公开分发和把档案重新投入生产不在本命令范围中。不要在服务运行时用 `rollback.sh` 替换应用。
+升级保留原实例和任务历史，并把原应用、经检查的 SQLite 一致快照及已登记制品放入命令输出的私有备份目录。候选先在维护状态通过 MCP 握手、版本检查和 doctor，才恢复提交。若候选启动或检查失败，安装器尝试恢复原应用和服务，并保留失败现场。跨 schema 时先迁移独立数据库，校验历史，再用同文件系统的原子交换替换活动数据库。候选启动失败会换回原库与原应用；如果看到“自动恢复未通过”或遗留升级锁，保留锁、维护标记和备份，避免重复执行。强杀升级器和真实断电尚未验证；签名公证、公开分发和把档案重新投入生产不在本命令范围中。
+
+install、upgrade 与 rollback 统一使用 `$HOME/Applications/.relay-backup.*` 备份布局：`RelayTaskWindow.app`、`data/relay.sqlite3`（一致快照）与 `metadata.json`（created_at、product、db_schema、source、app_sha256、database_snapshot_sha256）。回退命令是 `packaging/rollback.sh "$HOME/Applications" [备份目录或后缀]`：它先停服并为当前状态再建一个同格式备份，校验应用摘要与数据快照摘要后才恢复；同 schema 直接还原快照，v9 → v8 只走候选支持的 `maintenance rollback-v8`，其他跨 schema 降级拒绝。回退后启动服务并运行 doctor、MCP 握手与版本/schema 核对；失败保留现场并尝试恢复回退前状态。不要在服务运行中手工替换 App。
 
 在独立 HOME 和临时 launchd 标签上复验：`packaging/rehearse-upgrade.sh <0.1.0 ZIP> <0.1.1 ZIP>`。演练制造一个无法启动的候选，再安装正常候选；两次都检查同一个既有任务和补丁。从 v8 验证迁移时，用 Git 基线 `906bfa3` 构建原 `relayctl`，以 `packaging/rehearse-schema-upgrade.sh <v8 relayctl> <v9 ZIP>` 实测。旧实例用 v8 daemon 创建和读取数据，UI 和离线样本提交借用新包助手。
 

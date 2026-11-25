@@ -179,6 +179,14 @@ if [ "$snapshot_ok" -ne 1 ]; then
   cat "$stage/snapshot.log" >&2
   fail "等待 daemon 释放实例锁超时"
 fi
+# Unified backup metadata shared with install/rollback.
+OLD_APP_SHA="$(/usr/bin/shasum -a 256 "$APP/$BIN" | awk '{print $1}')"
+SNAPSHOT_SHA="$(cd "$backup/data" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do
+  /usr/bin/shasum -a 256 "$f"
+done | /usr/bin/shasum -a 256 | awk '{print $1}')"
+cat > "$backup/metadata.json" <<JSON
+{"created_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","product":"$OLD_VERSION","db_schema":$old_schema,"source":"upgrade","app_sha256":"$OLD_APP_SHA","database_snapshot":"data","database_snapshot_sha256":"$SNAPSHOT_SHA"}
+JSON
 if [ "$old_schema" != "$new_schema" ]; then
   "$NEXT/$BIN" maintenance prepare-v8-v9 "$backup/database-exchange" --instance-dir "$INST"
   exchanged=1

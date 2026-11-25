@@ -44,10 +44,14 @@ BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CANDI
 if [ -e "$APP" ]; then
   # Preview install is fresh only; upgrading a running launchd service is a separate operation.
   [ "$MODE" != --local-preview ] || { echo "已安装应用，拒绝覆盖运行中的试用版" >&2; exit 1; }
-  STAMP="$(date -u +%Y%m%d%H%M%S)"
-  mkdir -p "$DEST/.backup"
-  BACKUP="$DEST/.backup/$STAMP"
-  mkdir "$BACKUP"
+  # Unified backup layout shared with upgrade/rollback (.relay-backup.XXXXXX).
+  BACKUP="$(mktemp -d "$DEST/.relay-backup.XXXXXX")"
+  OLD_APP_SHA="$(/usr/bin/shasum -a 256 "$APP/Contents/Resources/relay/relayctl" | awk '{print $1}')"
+  OLD_PRODUCT="$(sed -n 's/.*"product":"\([^"]*\)".*/\1/p' "$APP/Contents/Resources/relay/version.json" 2>/dev/null || true)"
+  OLD_SCHEMA="$(sed -n 's/.*"db_schema":\([0-9]*\).*/\1/p' "$APP/Contents/Resources/relay/version.json" 2>/dev/null || echo 0)"
+  cat > "$BACKUP/metadata.json" <<JSON
+{"created_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","product":"$OLD_PRODUCT","db_schema":${OLD_SCHEMA:-0},"source":"install","app_sha256":"$OLD_APP_SHA","database_snapshot":null,"database_snapshot_sha256":null}
+JSON
   mv "$APP" "$BACKUP/RelayTaskWindow.app"
 fi
 mv "$CANDIDATE" "$APP"

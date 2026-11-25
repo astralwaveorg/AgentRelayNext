@@ -71,15 +71,18 @@ step "4 任务窗口读同一实例（无界面模式）"
 expect_out 待验收 "$APP/Contents/MacOS/RelayTaskWindow" --socket "$S" --dump
 expect_out "返工 1 次" "$APP/Contents/MacOS/RelayTaskWindow" --socket "$S" --dump
 
-step "5 升级（重装）→ 数据与状态保持 → 回滚"
+step "5 升级（重装）→ 数据与状态保持 → 统一备份格式"
 expect_ok "$ROOT/packaging/install.sh" "$ZIP" "$WORK/install"
 expect_out awaiting_review R status --task-id "$TASK_ID"   # 重装后旧实例的状态与制品仍可读
 pkill -f "relayctl daemon --instance-dir $INST" || true; sleep 0.5
 "$RELAY" daemon --instance-dir "$INST" --config "$WORK/config.json" >> "$WORK/daemon.log" 2>&1 &
 for _ in $(seq 1 100); do [ -S "$S" ] && break; sleep 0.1; done
 expect_out awaiting_review R status --task-id "$TASK_ID"
-expect_ok "$ROOT/packaging/rollback.sh" "$WORK/install"
-expect_out relay.v1 "$RELAY" version
+# 重装必须在统一 .relay-backup.* 中留下带 metadata 的旧应用备份。
+BACKUP_DIR="$(ls -1d "$WORK/install"/.relay-backup.*/ | head -1)"
+expect_ok test -f "$BACKUP_DIR/metadata.json"
+expect_ok test -d "$BACKUP_DIR/RelayTaskWindow.app"
+expect_out '"source":"install"' cat "$BACKUP_DIR/metadata.json"
 pkill -f "relayctl daemon --instance-dir $INST" || true; sleep 0.5
 
 step "6 数据备份与恢复核对（一致快照 → 新临时实例）"
@@ -99,4 +102,4 @@ for _ in $(seq 1 100); do [ -S "$WORK/restored/relay.sock" ] && break; sleep 0.1
 expect_out awaiting_review "$RELAY" --socket "$WORK/restored/relay.sock" status --task-id "$TASK_ID"
 expect_out "diff --git" "$RELAY" --socket "$WORK/restored/relay.sock" artifact --task-id "$TASK_ID" --attempt-no 1 --kind diff
 pkill -f "relayctl daemon --instance-dir $WORK/restored" || true
-echo; echo "安装预演通过：打包、临时安装、daemon 跑样本、任务窗口、重装、回滚、备份恢复"
+echo; echo "安装预演通过：打包、临时安装、daemon 跑样本、任务窗口、重装、统一备份、备份恢复"
