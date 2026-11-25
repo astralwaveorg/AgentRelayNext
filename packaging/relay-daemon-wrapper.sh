@@ -20,5 +20,16 @@ mkdir -p "$ROOT"
 chmod 700 "$ROOT" 2>/dev/null || true
 rotate "$ROOT/daemon.log"
 rotate "$ROOT/daemon.err.log"
+# Rotate while the daemon runs, not only at startup. The subshell watches the
+# wrapper PID (which becomes the daemon after exec) and exits with it.
+pid=$$
+interval="${RELAY_LOG_ROTATE_SECONDS:-60}"
+(
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$interval"
+    rotate "$ROOT/daemon.log"
+    rotate "$ROOT/daemon.err.log"
+  done
+) &
 exec "$RELAY" daemon --instance-dir "$INSTANCE" --config "$CONFIG" \
   >>"$ROOT/daemon.log" 2>>"$ROOT/daemon.err.log"
