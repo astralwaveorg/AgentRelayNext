@@ -646,17 +646,40 @@ fn rusqlite_conn(path: &Path) -> rusqlite::Connection {
     rusqlite::Connection::open(path).unwrap()
 }
 
-/// 统一子进程监管（05/08）：组长退出 ≠ 整组退出。父进程已退出、同组
-/// 后代仍存活 → 整组退出不可确认 → 任务失败且 gate 保持 pending（持久
-/// 阻断），不产生可验收候选。
+/// 统一子进程监管（05/08/A3）：组长退出 ≠ 整组退出。父进程已退出、同组
+/// 后代仍存活且忽略 TERM → 有界回收（TERM → SIGKILL）确认整组退出后任务
+/// 失败、不产生可验收候选；后代不得残留，managed group 收口为 resolved。
 #[test]
-fn leader_exit_with_live_descendant_blocks_and_publishes_no_candidate() {
+fn leader_exit_with_live_descendant_is_reclaimed_before_failure() {
     let env = setup("orphan-group", Some("orphan"));
+    let mut config = env.config.clone();
+    config.reclaim_term_ms = 400;
+    config.reclaim_kill_ms = 400;
     let store: Arc<Store> = Arc::new(Store::open(&env.dir.join("instance/relay.db")).unwrap());
-    let service = M1Service::new(store.clone(), env.config.clone());
+    let service = M1Service::new(store.clone(), config);
     let task_a = submit_simple_id(&env, &service, "0a0b0000-0000-4000-8000-0000000000aa");
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    service.run_one_claim(&stop);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner = {
+        let service = service.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || service.run_one_claim(&stop))
+    };
+    // Capture the worker's process group before reclaim settles it.
+    let mut pgid = None;
+    for _ in 0..200 {
+        if let Some(group) = store
+            .list_managed_groups(Some("tracking"))
+            .unwrap()
+            .into_iter()
+            .find(|g| g.task_id == task_a)
+        {
+            pgid = Some(group.pgid);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pgid = pgid.expect("worker group should be tracked before exit");
+    runner.join().unwrap();
     for _ in 0..200 {
         let state = store.get_task(&task_a).unwrap().unwrap().state.to_string();
         if state == "failed" {
@@ -664,19 +687,34 @@ fn leader_exit_with_live_descendant_blocks_and_publishes_no_candidate() {
         }
         std::thread::sleep(Duration::from_millis(30));
     }
-    // 整组退出不可确认 → 任务失败（不进入待验收）。
+    // 回收确认后任务失败（不进入待验收），不产生可验收候选。
     assert_eq!(
         store.get_task(&task_a).unwrap().unwrap().state.to_string(),
         "failed"
     );
-    // gate 保持 pending（持久阻断）。
-    let gates = store.list_pending_gates().unwrap();
-    assert!(
-        gates.iter().any(|g| g.task_id == task_a),
-        "整组退出未确认时 gate 应保持 pending: {gates:?}"
-    );
-    // 无制品登记（不产生可验收候选）。
     assert!(store.get_artifact(&task_a, 1).unwrap().is_none());
+    // 后代必须已被有界回收：不依赖其 300 秒自限退出。
+    assert!(
+        !relay_sys::group_has_members(pgid).unwrap(),
+        "组长退出后同组后代必须被回收"
+    );
+    // managed group 已 resolved；gate 不残留 pending。
+    assert!(
+        store
+            .list_managed_groups(Some("tracking"))
+            .unwrap()
+            .iter()
+            .all(|g| g.task_id != task_a),
+        "managed group 应已 resolved"
+    );
+    assert!(
+        !store
+            .list_pending_gates()
+            .unwrap()
+            .iter()
+            .any(|g| g.task_id == task_a),
+        "回收确认后不应残留 pending gate"
+    );
     fs::remove_dir_all(&env.dir).ok();
 }
 
@@ -1503,12 +1541,11 @@ fn adapter_protocol_negative_cases_end_within_deadline() {
 }
 
 /// 已复现回归（Codex@d82b5bc）：组长退出、后代仍持 stdout，读取超时后
-/// 任务失败，但 pending gate 曾为 false（组长退出即被当作整组退出→
-/// gate 解封→B 被领取）。修复后：整组退出不可确认 → gate 保持 pending、
-/// B 保持 queued；重启后仍不派发；受管恢复操作（有证据）后 A 不重跑、
-/// B 恰好启动一次。
+/// 适配器读超时 + 后代持有 stdout 管道（A3）：组长退出 ≠ 整组退出。
+/// 有界回收确认整组退出后任务失败、gate 不残留 pending；随后 B 可领取
+/// 一次，A 不重跑。
 #[test]
-fn leader_exit_with_pipe_holder_keeps_gate_pending_across_restart() {
+fn leader_exit_with_pipe_holder_is_reclaimed_and_unblocks_claims() {
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 适配器夹具：父进程退出、后代持有 stdout 管道。
     let env = setup("pipe-holder", None);
@@ -1519,6 +1556,8 @@ fn leader_exit_with_pipe_holder_keeps_gate_pending_across_restart() {
     config.adapter_read_timeout_ms = 700;
     config.adapter_probe_timeout_ms = 2_000;
     config.group_exit_budget_ms = 500;
+    config.reclaim_term_ms = 400;
+    config.reclaim_kill_ms = 400;
     config.worker_timeout_ms = 5_000;
     let store: Arc<Store> = Arc::new(Store::open(&env.dir.join("instance/relay.sqlite3")).unwrap());
     let service = M1Service::new(store.clone(), config.clone());
@@ -1526,8 +1565,27 @@ fn leader_exit_with_pipe_holder_keeps_gate_pending_across_restart() {
     std::env::set_var("ADAPTER_EMIT", "hold_stdout");
     std::env::set_var("ADAPTER_HOLD_SECONDS", "30");
     let task_a = submit_simple_id(&env, &service, "0c0d0000-0000-4000-8000-0000000000aa");
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    service.run_one_claim(&stop);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner = {
+        let service = service.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || service.run_one_claim(&stop))
+    };
+    let mut pgid = None;
+    for _ in 0..200 {
+        if let Some(group) = store
+            .list_managed_groups(Some("tracking"))
+            .unwrap()
+            .into_iter()
+            .find(|g| g.task_id == task_a)
+        {
+            pgid = Some(group.pgid);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pgid = pgid.expect("adapter group should be tracked before reclaim");
+    runner.join().unwrap();
     for _ in 0..200 {
         let state = store.get_task(&task_a).unwrap().unwrap().state.to_string();
         if state == "failed" {
@@ -1540,114 +1598,41 @@ fn leader_exit_with_pipe_holder_keeps_gate_pending_across_restart() {
         "failed",
         "读超时后任务失败"
     );
-    // 关键：gate 仍 pending（不被组长退出误释放）。
-    let gates = store.list_pending_gates().unwrap();
+    // 后代已被有界回收：不依赖其 30 秒自限退出。
     assert!(
-        gates.iter().any(|g| g.task_id == task_a),
-        "gate 应保持 pending（持久阻断）: {gates:?}"
+        !relay_sys::group_has_members(pgid).unwrap(),
+        "持管道后代必须被回收"
     );
-
-    // B：不同 request_id；领取必须被阻断（重启后同样阻断）。
-    let task_b = submit_simple_id(&env, &service, "0e0f0000-0000-4000-8000-0000000000bb");
-    let stop2 = std::sync::atomic::AtomicBool::new(false);
-    assert!(!service.run_one_claim(&stop2), "gate 未确认时不得领取 B");
-    let store2: Arc<Store> =
-        Arc::new(Store::open(&env.dir.join("instance/relay.sqlite3")).unwrap());
-    let service2 = M1Service::new(store2.clone(), config.clone());
-    assert!(!service2.run_one_claim(&stop2), "重启后仍不得领取 B");
-    assert_eq!(
-        store2.get_task(&task_b).unwrap().unwrap().state.to_string(),
-        "queued"
-    );
-    let b_events = store2.list_events(0, 100).unwrap();
-    assert!(!b_events
-        .iter()
-        .any(|e| e.kind == "claim" && e.task_id == task_b));
-
-    // 受管恢复操作（正式入口 CLI）：组仍有成员 → 证据不足，保持阻断。
-    let exe = env!("CARGO_BIN_EXE_relayctl");
-    let refused = Command::new(exe)
-        .arg("gate")
-        .arg("confirm")
-        .arg("--instance-dir")
-        .arg(env.dir.join("instance"))
-        .arg("--task-id")
-        .arg(&task_a)
-        .arg("--note")
-        .arg("后代仍存活")
-        .arg("--by")
-        .arg("tester")
-        .output()
-        .unwrap();
+    // gate 不残留 pending；managed group 已 resolved。
     assert!(
-        !refused.status.success(),
-        "组仍存活时正式入口不得解封: {}",
-        String::from_utf8_lossy(&refused.stdout)
-    );
-    assert!(
-        store2
+        !store
             .list_pending_gates()
             .unwrap()
             .iter()
             .any(|g| g.task_id == task_a),
-        "拒绝后 gate 仍 pending"
+        "回收确认后不应残留 pending gate"
     );
-
-    // 结束后代（模拟进程确已不存在）后再次受管确认：可信证据 → 解封。
-    let groups = store2.list_managed_groups(None).unwrap();
-    if let Some(g) = groups.iter().find(|g| g.task_id == task_a) {
-        let _ = std::process::Command::new("kill")
-            .arg("-KILL")
-            .arg(format!("-{}", g.pgid))
-            .status();
-    }
-    std::thread::sleep(Duration::from_millis(200));
-    // 受管恢复（正式入口 CLI）：组已空 → 可信证据 → 解封并写审计。
-    let confirmed = Command::new(exe)
-        .arg("gate")
-        .arg("confirm")
-        .arg("--instance-dir")
-        .arg(env.dir.join("instance"))
-        .arg("--task-id")
-        .arg(&task_a)
-        .arg("--note")
-        .arg("后代已确认不存在")
-        .arg("--by")
-        .arg("tester")
-        .output()
-        .unwrap();
     assert!(
-        confirmed.status.success(),
-        "组为空时应可解封: stdout={} stderr={}",
-        String::from_utf8_lossy(&confirmed.stdout),
-        String::from_utf8_lossy(&confirmed.stderr)
+        store
+            .list_managed_groups(Some("tracking"))
+            .unwrap()
+            .iter()
+            .all(|g| g.task_id != task_a),
+        "managed group 应已 resolved"
     );
-    let report: serde_json::Value =
-        serde_json::from_slice(&confirmed.stdout).expect("解封输出 JSON");
-    assert_eq!(report["result"], json!("confirmed-exit"));
-    // 审计记录（attempt、证据、结果）。
-    let audit = store2.get_gate_resolution(&task_a, 1).unwrap().unwrap();
-    assert_eq!(audit.task_id, task_a);
-    assert_eq!(audit.result, "confirmed-exit");
-    assert!(!audit.evidence.is_empty());
 
-    // 解封后：B 恰好启动一次，A 不重跑。
-    let claimed = service2.run_one_claim(&stop2);
-    assert!(claimed, "解封后应恢复领取");
-    for _ in 0..200 {
-        if store2.get_task(&task_b).unwrap().unwrap().state.to_string() == "running" {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    let b_claims = store2
+    // 回收后 B 可正常领取一次，A 不重跑。
+    let task_b = submit_simple_id(&env, &service, "0e0f0000-0000-4000-8000-0000000000bb");
+    let stop2 = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    assert!(service.run_one_claim(&stop2), "回收确认后应恢复领取");
+    let b_claims = store
         .list_events(0, 100)
         .unwrap()
         .iter()
         .filter(|e| e.kind == "claim" && e.task_id == task_b)
         .count();
     assert_eq!(b_claims, 1, "B 恰好启动一次");
-    let a_claims = store2
+    let a_claims = store
         .list_events(0, 100)
         .unwrap()
         .iter()

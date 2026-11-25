@@ -1824,7 +1824,13 @@ impl M1Service {
         release_gate: bool,
     ) -> bool {
         let budget = Duration::from_millis(self.config.group_exit_budget_ms);
-        if self.confirm_group_exit(pgid, budget) {
+        // A leader exit is not a group exit. If the group still has members,
+        // reclaim it (TERM -> SIGKILL with bounded budgets) instead of leaving
+        // descendants alive behind a permanent dispatch block.
+        let confirmed = self.confirm_group_exit(pgid, budget)
+            || self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+                == ReclaimOutcome::Confirmed;
+        if confirmed {
             let _ = self
                 .store
                 .resolve_managed_group(task_id, attempt_no, &now_rfc3339());

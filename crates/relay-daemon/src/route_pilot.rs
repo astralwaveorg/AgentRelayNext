@@ -200,19 +200,53 @@ impl ChildGroup {
         }
     }
 }
-impl Drop for ChildGroup {
-    fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            match self.1 {
-                ProcessScope::Standalone => {
-                    let _ = relay_sys::killpg_kill(self.0.id() as i32);
-                }
-                ProcessScope::Tracked => {
-                    let _ = self.0.kill();
+/// Bounded wait for a process group to disappear. Probe errors count as
+/// "still alive" so they never produce an exit claim.
+fn wait_group_gone(pgid: i32, budget: Duration) -> bool {
+    let deadline = Instant::now() + budget;
+    loop {
+        match relay_sys::group_has_members(pgid) {
+            Ok(false) => return true,
+            Ok(true) | Err(_) => {
+                if Instant::now() >= deadline {
+                    return false;
                 }
             }
-            let _ = self.successful();
         }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+impl Drop for ChildGroup {
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        let pid = self.0.id() as i32;
+        match self.1 {
+            ProcessScope::Standalone => {
+                // The child leads its own group; reclaim it like the daemon
+                // supervisor does: TERM, then KILL, each with a bounded probe.
+                let _ = relay_sys::killpg_term(pid);
+                if !wait_group_gone(pid, Duration::from_millis(500)) {
+                    let _ = relay_sys::killpg_kill(pid);
+                    let _ = wait_group_gone(pid, Duration::from_millis(1500));
+                }
+            }
+            ProcessScope::Tracked => {
+                // Tracked children share the daemon group: only signal the
+                // direct child, never the group, and reap it with a bound.
+                let _ = self.0.kill();
+                let deadline = Instant::now() + Duration::from_millis(2_000);
+                while Instant::now() < deadline {
+                    if matches!(self.0.try_wait(), Ok(Some(_))) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+        let _ = self.successful();
     }
 }
 
