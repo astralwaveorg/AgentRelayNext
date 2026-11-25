@@ -3196,13 +3196,16 @@ impl M1Service {
 
     /// preparing 阶段失败（worktree/scope/规则配置）。
     fn fail_preparing(&self, task_id: &str, attempt_no: u32, expected_revision: u64, reason: &str) {
-        let _ = self.store.transition(TransitionInput {
-            task_id,
-            expected_active_attempt: attempt_no,
-            expected_revision,
-            event: Event::PreparationFailed,
-            now: &now_rfc3339(),
-        });
+        let _ = self.store.fail_worker_with_reason(
+            TransitionInput {
+                task_id,
+                expected_active_attempt: attempt_no,
+                expected_revision,
+                event: Event::PreparationFailed,
+                now: &now_rfc3339(),
+            },
+            &bounded_reason(reason),
+        );
         eprintln!("relay daemon: attempt {task_id}#{attempt_no} 准备失败：{reason}");
     }
 
@@ -3217,7 +3220,7 @@ impl M1Service {
                 event: Event::WorkerFailed,
                 now: &now_rfc3339(),
             },
-            reason,
+            &bounded_reason(reason),
         ) {
             eprintln!("relay daemon: failed to persist adapter diagnostic: {error}");
         }
@@ -3239,25 +3242,31 @@ impl M1Service {
         expected_revision: u64,
         reason: &str,
     ) {
-        let _ = self.store.transition(TransitionInput {
-            task_id,
-            expected_active_attempt: attempt_no,
-            expected_revision,
-            event: Event::WorkerFailed,
-            now: &now_rfc3339(),
-        });
+        let _ = self.store.fail_worker_with_reason(
+            TransitionInput {
+                task_id,
+                expected_active_attempt: attempt_no,
+                expected_revision,
+                event: Event::WorkerFailed,
+                now: &now_rfc3339(),
+            },
+            &bounded_reason(reason),
+        );
         eprintln!("relay daemon: attempt {task_id}#{attempt_no} 执行失败：{reason}");
     }
 
     /// verifying 阶段失败（差异/收据/发布/登记）。
     fn fail_verifying(&self, task_id: &str, attempt_no: u32, expected_revision: u64, reason: &str) {
-        let _ = self.store.transition(TransitionInput {
-            task_id,
-            expected_active_attempt: attempt_no,
-            expected_revision,
-            event: Event::VerificationFailed,
-            now: &now_rfc3339(),
-        });
+        let _ = self.store.fail_worker_with_reason(
+            TransitionInput {
+                task_id,
+                expected_active_attempt: attempt_no,
+                expected_revision,
+                event: Event::VerificationFailed,
+                now: &now_rfc3339(),
+            },
+            &bounded_reason(reason),
+        );
         eprintln!("relay daemon: attempt {task_id}#{attempt_no} 验证失败：{reason}");
     }
 
@@ -3586,6 +3595,26 @@ impl M1Service {
     }
 }
 
+/// Persisted failure reasons must be bounded (<=256 bytes) and free of
+/// control characters; an empty result falls back to a stable code.
+fn bounded_reason(reason: &str) -> String {
+    let cleaned: String = reason.chars().filter(|c| !c.is_control()).collect();
+    let cleaned = cleaned.trim();
+    let mut out = cleaned.to_owned();
+    if out.len() > 256 {
+        let mut end = 256;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+    }
+    if out.is_empty() {
+        "执行失败".to_owned()
+    } else {
+        out
+    }
+}
+
 fn store_error_to_biz(err: relay_store::StoreError) -> BizError {
     use relay_store::StoreError;
     match &err {
@@ -3747,5 +3776,19 @@ mod quota_tests {
         assert_eq!(managed_size(&root, 1024), 8);
         assert_eq!(managed_size(&root, 6), 8, "limit is checked after a file");
         fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod reason_tests {
+    use super::bounded_reason;
+
+    #[test]
+    fn failure_reason_is_bounded_and_clean() {
+        assert_eq!(bounded_reason("  a\u{0}b\n"), "ab");
+        assert_eq!(bounded_reason("   "), "执行失败");
+        let out = bounded_reason(&"x".repeat(300));
+        assert!(out.len() <= 256);
+        assert!(out.chars().all(|c| c == 'x'));
     }
 }

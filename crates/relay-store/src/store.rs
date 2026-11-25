@@ -508,12 +508,14 @@ impl Store {
         input: TransitionInput<'_>,
         reason: &str,
     ) -> Result<TransitionOutcome, StoreError> {
-        if input.event != Event::WorkerFailed
-            || reason.is_empty()
+        if !matches!(
+            input.event,
+            Event::WorkerFailed | Event::VerificationFailed | Event::PreparationFailed
+        ) || reason.is_empty()
             || reason.len() > 256
             || reason.chars().any(char::is_control)
         {
-            return Err(StoreError::InvalidInput("执行失败原因无效".into()));
+            return Err(StoreError::InvalidInput("失败原因无效".into()));
         }
         self.transition_with_reason(input, Some(reason))
     }
