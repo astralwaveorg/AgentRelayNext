@@ -183,11 +183,12 @@ fn invalid_task_id_and_symlinked_targets_are_rejected() {
 }
 
 #[test]
-fn hooks_and_filters_do_not_run() {
+fn local_execution_surfaces_are_rejected() {
     let dir = temp_dir("b1-hooks");
     let root = init_repo(&dir);
     let head = git_out(&root, &["rev-parse", "HEAD"]);
-    // 配置指向带可执行 post-checkout 钩子的目录：钩子会写标记文件。
+    // 配置指向带可执行 post-checkout 钩子的目录：预检应保守拒绝，
+    // 且钩子不得执行（无标记文件）。
     let hooks_dir = dir.join("hooks");
     fs::create_dir_all(&hooks_dir).unwrap();
     let marker = hooks_dir.join("marker");
@@ -211,14 +212,19 @@ fn hooks_and_filters_do_not_run() {
     );
 
     let managed = dir.join("managed");
-    let report = create_worktree(&root, &managed, "task_h1", 1, &head).unwrap();
-    // 钩子未执行：无标记文件。
+    let err = create_worktree(&root, &managed, "task_h1", 1, &head).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            WorktreeError::Check(GitCheckError::UnsafeRepository { .. })
+        ),
+        "{err:?}"
+    );
     assert!(!marker.exists(), "post-checkout 钩子不得执行");
-    // worktree 本身检出正常。
-    assert!(report.path.join("a.txt").exists());
-    drop(report);
+    assert!(!managed.join("worktrees").join("task_h1").exists());
 
-    // 配置过滤器（LFS 形态）的仓库直接拒绝，不创建。
+    // 恢复后配置过滤器（LFS 形态）：同样拒绝，不创建。
+    git_out(&root, &["config", "--unset", "core.hooksPath"]);
     git_out(&root, &["config", "filter.lfs.smudge", "git-lfs smudge"]);
     let err = create_worktree(&root, &managed, "task_h2", 1, &head).unwrap_err();
     assert!(

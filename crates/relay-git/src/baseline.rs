@@ -204,6 +204,13 @@ pub fn verify_baseline(
             reason: "配置了自定义过滤器（如 LFS）".into(),
         });
     }
+    for key in ["core.fsmonitor", "core.attributesFile", "core.hooksPath"] {
+        if git_query(repo_root, &["config", "--local", "--get", key])?.is_some() {
+            return Err(GitCheckError::UnsafeRepository {
+                reason: format!("配置了 {key}（可能触发外部命令）"),
+            });
+        }
+    }
     let replace_refs = git_query(
         repo_root,
         &[
@@ -248,6 +255,20 @@ pub fn verify_baseline(
             reason: "基线提交树含 Gitlink（mode 160000）条目，子模块未在本版安全确认范围内".into(),
         });
     }
+    // 6. 基线中的 .gitattributes 只拒绝实际启用 filter=driver 的条目；
+    //    -filter / !filter 与未设置 filter 的条目不得误拒。
+    for line in tree_listing.lines() {
+        let Some(path) = line.split_once('\t').map(|(_, path)| path) else {
+            continue;
+        };
+        if path.rsplit('/').next() == Some(".gitattributes")
+            && attributes_enable_filter(repo_root, commit_oid, path)?
+        {
+            return Err(GitCheckError::UnsafeRepository {
+                reason: format!("基线 .gitattributes 启用了 filter 驱动：{path}"),
+            });
+        }
+    }
     let _ = stderr;
     let object_format = match format.as_str() {
         "sha1" => "sha1",
@@ -257,4 +278,40 @@ pub fn verify_baseline(
         commit_oid: commit_oid.to_owned(),
         object_format,
     })
+}
+
+/// 基线 `.gitattributes` 是否启用了 `filter=<driver>`。`-filter`、`!filter`
+/// 与裸 `filter`（无驱动名）不算启用；注释不参与判断。
+fn attributes_enable_filter(
+    repo_root: &Path,
+    commit_oid: &str,
+    path: &str,
+) -> Result<bool, GitCheckError> {
+    let spec = format!("{commit_oid}:{path}");
+    let out = crate::git_layer::git_raw_bounded(
+        repo_root,
+        &["show", &spec],
+        None,
+        std::time::Duration::from_secs(10),
+    )?;
+    if out.timed_out || out.overflow {
+        return Err(GitCheckError::UnsafeRepository {
+            reason: format!(".gitattributes 读取超限：{path}"),
+        });
+    }
+    if !out.ok {
+        return Err(GitCheckError::CommandFailed {
+            argv: format!("git show {spec}"),
+            stderr: crate::git_layer::truncate(&String::from_utf8_lossy(&out.stderr)),
+        });
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(text.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or("");
+        line.split_whitespace().any(|token| {
+            token
+                .strip_prefix("filter=")
+                .is_some_and(|driver| !driver.is_empty())
+        })
+    }))
 }

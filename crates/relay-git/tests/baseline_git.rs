@@ -291,3 +291,50 @@ fn gitlink_in_baseline_tree_is_rejected_without_submodule_config() {
 
     remove_dir(&dir);
 }
+
+/// A5：local config 中的可执行面（fsmonitor/attributesFile/hooksPath）
+/// 一律保守拒绝；清理后恢复通过。
+#[test]
+fn local_git_execution_surfaces_are_rejected() {
+    let dir = temp_dir("a5-surfaces");
+    let root = init_repo(&dir);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    for (key, value) in [
+        ("core.fsmonitor", "/tmp/relay-fsmonitor"),
+        ("core.attributesFile", "/tmp/relay-attributes"),
+        ("core.hooksPath", "/tmp/relay-hooks"),
+    ] {
+        git_out(&root, &["config", key, value]);
+        let err = verify_baseline(&root, &head).unwrap_err();
+        assert!(
+            matches!(err, GitCheckError::UnsafeRepository { .. }),
+            "{key}: {err:?}"
+        );
+        git_out(&root, &["config", "--unset", key]);
+    }
+    verify_baseline(&root, &head).unwrap();
+    remove_dir(&dir);
+}
+
+/// A5：基线 .gitattributes 只拒绝实际启用 filter=driver 的条目；
+/// `-filter`（Unset）不得误拒。
+#[test]
+fn baseline_attributes_filter_is_rejected_but_unset_is_allowed() {
+    let dir = temp_dir("a5-attrs");
+    let root = init_repo(&dir);
+    fs::write(root.join(".gitattributes"), "*.bin -filter\n").unwrap();
+    git_out(&root, &["add", ".gitattributes"]);
+    git_out(&root, &["commit", "-q", "-m", "attributes unset"]);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    verify_baseline(&root, &head).unwrap();
+
+    fs::write(root.join(".gitattributes"), "*.bin filter=lfs\n").unwrap();
+    git_out(&root, &["commit", "-q", "-am", "attributes filter"]);
+    let head = git_out(&root, &["rev-parse", "HEAD"]);
+    let err = verify_baseline(&root, &head).unwrap_err();
+    assert!(
+        matches!(err, GitCheckError::UnsafeRepository { .. }),
+        "{err:?}"
+    );
+    remove_dir(&dir);
+}

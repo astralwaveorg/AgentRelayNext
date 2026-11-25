@@ -26,8 +26,13 @@ pub(crate) const MAX_GIT_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_GIT_STDERR_BYTES: usize = 64 * 1024;
 
 /// 构建经环境加固的 git `Command`（仅构建，不执行）。
+///
+/// 使用可信绝对路径 `/usr/bin/git`（找不到即启动失败 fail closed），
+/// 禁用 system/global 配置与系统级 attributes，强制关闭 fsmonitor、
+/// 外部 attributes 文件与 hooks，并按前缀清除所有可注入的 `GIT_CONFIG_*`
+/// 与对象目录环境变量。子命令仍只读：不执行 hooks/过滤器、不联网补对象。
 pub(crate) fn git_command(root: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new("git");
+    let mut command = Command::new("/usr/bin/git");
     command
         .arg("--no-optional-locks")
         .arg("-C")
@@ -35,9 +40,19 @@ pub(crate) fn git_command(root: &Path, args: &[&str]) -> Command {
         // 传输协议双重关闭：配置白名单与环境变量都不能放开。
         .arg("-c")
         .arg("protocol.allow=never")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("core.attributesFile=/dev/null")
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
         .args(args)
         .env("GIT_ALLOW_PROTOCOL", "")
         .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_ATTR_NOSYSTEM", "1")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -45,6 +60,18 @@ pub(crate) fn git_command(root: &Path, args: &[&str]) -> Command {
         .env_remove("GIT_COMMON_DIR")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
+    for (name, _) in std::env::vars_os() {
+        let name = name.to_string_lossy();
+        if name == "GIT_CONFIG_COUNT"
+            || name == "GIT_CONFIG_PARAMETERS"
+            || name == "GIT_EXEC_PATH"
+            || name == "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+            || name.starts_with("GIT_CONFIG_KEY_")
+            || name.starts_with("GIT_CONFIG_VALUE_")
+        {
+            command.env_remove(name.as_ref());
+        }
+    }
     command
 }
 
