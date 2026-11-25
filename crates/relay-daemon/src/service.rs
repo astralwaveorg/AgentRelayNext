@@ -1648,6 +1648,7 @@ impl M1Service {
                     Err(err) => json!({"error": err.code, "detail": err.message}),
                 };
             }
+            let review = bounded_review(review);
             let stages = self
                 .store
                 .list_stage_runs(&task.task_id, task.active_attempt)
@@ -3787,6 +3788,48 @@ mod quota_tests {
     }
 }
 
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+/// Bound the per-review payload so a single task cannot exceed the IPC frame
+/// budget: finding strings are shortened and the findings list is trimmed.
+fn bounded_review(mut review: Value) -> Value {
+    const MAX_BYTES: usize = 64 * 1024;
+    if let Some(findings) = review.get_mut("findings").and_then(Value::as_array_mut) {
+        for finding in findings.iter_mut() {
+            if let Some(object) = finding.as_object_mut() {
+                for key in ["path", "evidence", "suggestion"] {
+                    if let Some(text) = object.get(key).and_then(Value::as_str) {
+                        object.insert(key.to_owned(), Value::String(truncate_chars(text, 512)));
+                    }
+                }
+            }
+        }
+    }
+    let mut truncated = false;
+    while serde_json::to_vec(&review).map(|v| v.len()).unwrap_or(0) > MAX_BYTES {
+        let Some(findings) = review.get_mut("findings").and_then(Value::as_array_mut) else {
+            break;
+        };
+        if findings.pop().is_none() {
+            break;
+        }
+        truncated = true;
+    }
+    if truncated {
+        review["truncated"] = Value::Bool(true);
+    }
+    review
+}
+
 #[cfg(test)]
 mod reason_tests {
     use super::bounded_reason;
@@ -3798,5 +3841,31 @@ mod reason_tests {
         let out = bounded_reason(&"x".repeat(300));
         assert!(out.len() <= 256);
         assert!(out.chars().all(|c| c == 'x'));
+    }
+}
+
+#[cfg(test)]
+mod overview_tests {
+    use super::bounded_review;
+    use serde_json::json;
+
+    #[test]
+    fn review_findings_are_bounded() {
+        let big = "x".repeat(4096);
+        let findings: Vec<_> = (0..20)
+            .map(|_| json!({"path": big, "evidence": big, "suggestion": big, "severity": "major"}))
+            .collect();
+        let bounded = bounded_review(json!({"findings": findings}));
+        let text = serde_json::to_string(&bounded).unwrap();
+        assert!(
+            text.len() <= 64 * 1024 + 2048,
+            "bounded size {}",
+            text.len()
+        );
+        assert!(bounded["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| { f["evidence"].as_str().unwrap().len() <= 515 }));
     }
 }
