@@ -14,6 +14,66 @@ import Darwin
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - 有界子进程（超时、取消、输出上限）
+
+struct ProcessResult {
+    let status: Int32
+    let output: Data
+    let timedOut: Bool
+}
+
+private final class OutputBox {
+    private let lock = NSLock()
+    private let limit: Int
+    private var buffer = Data()
+    init(limit: Int) { self.limit = limit }
+    func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        if buffer.count < limit { buffer.append(chunk.prefix(limit - buffer.count)) }
+    }
+    var data: Data { lock.lock(); defer { lock.unlock() }; return buffer }
+}
+
+enum ProcessRunner {
+    /// 默认 120 秒超时；stdout/stderr 合并后最多保留 64 KiB。超时先 TERM，
+    /// 宽限后仍存活再 SIGKILL；不无限 readDataToEndOfFile。
+    static func run(
+        executable: URL,
+        arguments: [String],
+        environment: [String: String]? = nil,
+        timeout: TimeInterval = 120,
+        outputLimit: Int = 64 * 1024
+    ) throws -> ProcessResult {
+        let child = Process()
+        child.executableURL = executable
+        child.arguments = arguments
+        if let environment { child.environment = environment }
+        let pipe = Pipe()
+        child.standardOutput = pipe
+        child.standardError = pipe
+        try child.run()
+        let box = OutputBox(limit: outputLimit)
+        let handle = pipe.fileHandleForReading
+        handle.readabilityHandler = { stream in box.append(stream.availableData) }
+        let deadline = Date().addingTimeInterval(timeout)
+        while child.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        var timedOut = false
+        if child.isRunning {
+            timedOut = true
+            child.terminate()
+            Thread.sleep(forTimeInterval: 0.5)
+            if child.isRunning { kill(child.processIdentifier, SIGKILL) }
+        }
+        child.waitUntilExit()
+        handle.readabilityHandler = nil
+        box.append(handle.availableData)
+        return ProcessResult(status: child.terminationStatus, output: box.data, timedOut: timedOut)
+    }
+}
+
 // MARK: - 本机 RPC（每连接 hello + 至多一条业务请求）
 
 enum RelayError: Error, CustomStringConvertible {
@@ -336,6 +396,8 @@ final class Model: ObservableObject {
     @Published var showComposer = false
     @Published var showRegistration = false
     @Published var acceptanceTarget: ReviewDecision?
+    @Published var previewStatus: String?
+    @Published var enablingPreview = false
     @Published private(set) var socket: String
     @Published fileprivate var projects: [ProjectEntry] = []
     @Published fileprivate var activeProject: ProjectEntry?
@@ -354,9 +416,59 @@ final class Model: ObservableObject {
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                // 窗口可见时 1 秒，关闭窗口后 5 秒低频刷新（不再完全冻结）。
+                let open = await MainActor.run { NSApp.windows.contains { $0.isVisible } }
+                let seconds = open ? 1 : 5
+                try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
             }
         }
+        Task { await checkPreview() }
+    }
+
+    /// 菜单文字与图标使用同一数据源：连接失败/过期时不得继续显示“正常”。
+    var menuStatus: String {
+        if conn == .inactive { return "服务不可用（未连接）" }
+        if conn == .failed { return "服务不可用" + (message.map { "：\($0)" } ?? "") }
+        guard let overview else { return "连接中…" }
+        let base = Wording.service(overview.state, pending: overview.pending, blocking: overview.blocking)
+        if let lastUpdated, Date().timeIntervalSince(lastUpdated) > 30 {
+            return "状态可能已过期：\(base)（最后更新 \(lastUpdated.formatted(date: .omitted, time: .shortened))）"
+        }
+        return base
+    }
+
+    func checkPreview() async {
+        guard localPreview, let relayctl = Bundle.main.resourceURL?.appendingPathComponent("relay/relayctl") else { return }
+        do {
+            let result = try await Task.detached(priority: .utility) {
+                try ProcessRunner.run(executable: relayctl, arguments: ["local-preview", "status"], timeout: 15)
+            }.value
+            if let object = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+               let status = object["status"] as? String {
+                previewStatus = status
+            }
+        } catch { previewStatus = "unavailable" }
+    }
+
+    func enablePreview() async {
+        guard localPreview, !enablingPreview else { return }
+        enablingPreview = true
+        actionMessage = nil
+        defer { enablingPreview = false }
+        guard let relayctl = Bundle.main.resourceURL?.appendingPathComponent("relay/relayctl") else { return }
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try ProcessRunner.run(executable: relayctl, arguments: ["local-preview", "enable"], timeout: 60)
+            }.value
+            let object = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+            if result.status == 0, object?["status"] as? String == "running" {
+                previewStatus = "running"
+                actionMessage = "本地预览服务已启用"
+                await refresh()
+            } else {
+                actionMessage = "启用失败：" + String(decoding: result.output.prefix(512), as: UTF8.self)
+            }
+        } catch { actionMessage = "启用失败：\(error)" }
     }
 
     func stop() { loop?.cancel(); loop = nil }
@@ -447,19 +559,13 @@ final class Model: ObservableObject {
         do {
             let id = try await Task.detached(priority: .userInitiated) {
                 guard let resources = Bundle.main.resourceURL else { throw RelayError.system("应用资源缺失") }
-                let child = Process()
-                child.executableURL = resources.appendingPathComponent("relay/relayctl")
-                child.arguments = ["local-preview", "submit"]
-                let output = Pipe()
-                child.standardOutput = output
-                child.standardError = output
-                try child.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                child.waitUntilExit()
-                guard child.terminationStatus == 0,
-                      let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let task = result["task"] as? [String: Any], let id = task["id"] as? String else {
-                    throw RelayError.badProtocol(String(decoding: data.prefix(1024), as: UTF8.self))
+                let result = try ProcessRunner.run(
+                    executable: resources.appendingPathComponent("relay/relayctl"),
+                    arguments: ["local-preview", "submit"], timeout: 120)
+                guard result.status == 0, !result.timedOut,
+                      let object = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+                      let task = object["task"] as? [String: Any], let id = task["id"] as? String else {
+                    throw RelayError.badProtocol(String(decoding: result.output.prefix(1024), as: UTF8.self))
                 }
                 return id
             }.value
@@ -488,27 +594,22 @@ final class Model: ObservableObject {
                     .first(where: { fm.isExecutableFile(atPath: $0) }) else {
                     throw RelayError.system("找不到 OpenCode。请先安装 OpenCode，再运行样本。")
                 }
-                let child = Process()
-                child.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                child.arguments = [
-                    "-I", relay.appendingPathComponent("paired-demo/claude-review-e2e.py").path,
-                    relay.appendingPathComponent("relayctl").path, claude, "--pair-opencode", opencode,
-                    "--catalog", relay.appendingPathComponent("mock/catalog").path,
-                ]
-                child.environment = ["PATH": "/usr/bin:/bin", "HOME": home]
-                let output = Pipe()
-                child.standardOutput = output
-                child.standardError = output
-                try child.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                child.waitUntilExit()
-                guard child.terminationStatus == 0,
-                      let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      result["mode"] as? String == "two-clis",
-                      result["state"] as? String == "awaiting_review",
-                      result["stages"] as? [[String]] == [["implement", "succeeded"], ["verify", "succeeded"], ["review", "succeeded"]],
-                      result["artifacts"] as? Int == 1 else {
-                    throw RelayError.badProtocol("双工具样本未通过：\(String(decoding: data.suffix(1024), as: UTF8.self))")
+                let result = try ProcessRunner.run(
+                    executable: URL(fileURLWithPath: "/usr/bin/python3"),
+                    arguments: [
+                        "-I", relay.appendingPathComponent("paired-demo/claude-review-e2e.py").path,
+                        relay.appendingPathComponent("relayctl").path, claude, "--pair-opencode", opencode,
+                        "--catalog", relay.appendingPathComponent("mock/catalog").path,
+                    ],
+                    environment: ["PATH": "/usr/bin:/bin", "HOME": home],
+                    timeout: 180)
+                guard result.status == 0, !result.timedOut,
+                      let object = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+                      object["mode"] as? String == "two-clis",
+                      object["state"] as? String == "awaiting_review",
+                      object["stages"] as? [[String]] == [["implement", "succeeded"], ["verify", "succeeded"], ["review", "succeeded"]],
+                      object["artifacts"] as? Int == 1 else {
+                    throw RelayError.badProtocol("双工具样本未通过：\(String(decoding: result.output.suffix(1024), as: UTF8.self))")
                 }
             }.value
             actionMessage = "双工具样本通过：Claude Code 实现、验证和 OpenCode 评审均成功。已生成 1 份待人工验收制品；本次样本在临时实例运行。"
@@ -1157,31 +1258,35 @@ struct ReviewCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let review = task.review, review["error"] == nil {
                     Text("评审 \(review["verdict"] as? String ?? "?")，返工 \(review["reworks"] as? Int ?? 0) 次")
+                        .accessibilityLabel("评审结论 \(review["verdict"] as? String ?? "未知")，返工 \(review["reworks"] as? Int ?? 0) 次")
                     let implement = review["implement"] as? [String: Any] ?? [:]
                     let reviewer = review["reviewer"] as? [String: Any] ?? [:]
                     Text("实现者 \(implement["identity"] as? String ?? "?") / \(implement["model"] as? String ?? "?")；评审者 \(reviewer["identity"] as? String ?? "?") / \(reviewer["model"] as? String ?? "?")")
                         .foregroundStyle(.secondary)
+                        .accessibilityLabel("实现者 \(implement["identity"] as? String ?? "未知")，模型 \(implement["model"] as? String ?? "未知")；评审者 \(reviewer["identity"] as? String ?? "未知")，模型 \(reviewer["model"] as? String ?? "未知")")
                     Text("补丁摘要 \(Wording.short(review["candidate_diff_sha256"] as? String))")
                     Text("收据摘要 \(Wording.short(review["test_receipt_sha256"] as? String))")
                     let findings = review["findings"] as? [[String: Any]] ?? []
                     if !findings.isEmpty {
                         Text("findings（\(findings.count)）").font(.subheadline.bold())
+                            .accessibilityLabel("发现 \(findings.count) 条问题")
                         ForEach(Array(findings.enumerated()), id: \.offset) { _, finding in
                             Text("  \(finding["severity"] as? String ?? "") \(finding["path"] as? String ?? "")：\(finding["evidence"] as? String ?? "")")
                                 .font(.caption)
+                                .accessibilityLabel("问题：严重程度 \(finding["severity"] as? String ?? "未知")，路径 \(finding["path"] as? String ?? "未知")，证据 \(finding["evidence"] as? String ?? "")")
                         }
                     }
                 } else {
                     Text("待验收结果不可用：\((task.review?["error"] as? String) ?? "未登记制品")")
                         .foregroundStyle(.red)
+                        .accessibilityLabel("待验收结果不可用")
                 }
                 Text("验收只登记交付结果，不会合并或应用补丁。")
                     .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("验收只登记交付结果，不会合并或应用补丁")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("待验收结果")
         }
     }
 }
@@ -1340,6 +1445,28 @@ struct ContentView: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 ServiceBar(model: model)
+                if model.localPreview, model.previewStatus == "not_configured" {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "bolt.horizontal.circle")
+                            .font(.title3).foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("本地预览尚未启用").font(.callout.bold())
+                            Text("启用会创建 ~/.agent-relay-next 并注册当前用户的 LaunchAgent；不会安装系统守护进程。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(model.enablingPreview ? "正在启用…" : "启用本地预览", systemImage: "power") {
+                            Task { await model.enablePreview() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.enablingPreview)
+                        .accessibilityLabel("启用本地预览")
+                    }
+                    .padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("本地预览尚未启用")
+                }
             }
             .padding(14)
             .relaySurface()
@@ -1479,8 +1606,9 @@ struct RelayMenu: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Agent Relay").font(.headline)
-                    Text(model.overview.map { Wording.service($0.state, pending: $0.pending, blocking: $0.blocking) } ?? "连接中…")
+                    Text(model.menuStatus)
                         .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("服务状态：\(model.menuStatus)")
                 }
             }
             if let overview = model.overview, overview.pending + overview.blocking > 0 {
