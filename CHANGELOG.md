@@ -3,6 +3,42 @@
 所有用户可见变化记录在此。产品版本以 `crates/relay-daemon/Cargo.toml` 为准；里程碑
 （M1/M2/M2.5/M3）不是版本号。
 
+## 0.1.26 — 2026-11-25
+
+### Added
+
+- `relayctl local-preview enable|status|disable`: the packaged app can create
+  the per-user instance, install the stable wrapper, register the LaunchAgent,
+  and verify doctor + MCP without source or manual plist edits. `disable` only
+  touches Relay-owned plists and preserves data.
+- First-run onboarding in the task window offers the explicit enable action.
+- Release pipeline: `verify-assets.py` writes and re-verifies `SHA256SUMS` from
+  an explicit asset list; `smoke-native.sh` runs prepare/daemon/doctor/MCP/
+  offline demo/digests/DMG mount in a temp HOME; stable asset names without
+  build timestamps; tag-only releases with `overwrite_files: false` and
+  `fail_on_unmatched_files: true`.
+
+### Changed
+
+- Worker process groups are reclaimed after leader exit (TERM → SIGKILL with
+  bounded probes) instead of leaving descendants behind a permanent gate.
+- Diff collection is bounded: 8 MiB/file, 32 MiB total, 16 MiB patch, 32 MiB
+  git output, 30 s deadline; FIFO/socket/device are rejected without content
+  reads; added files keep their executable bit.
+- Git commands use `/usr/bin/git`, disable system/global config and attributes,
+  force fsmonitor/hooks/attributes off, and clear `GIT_CONFIG_*` injections.
+  Baseline rejects local execution surfaces and active `filter=` attributes.
+- install/upgrade/rollback share `.relay-backup.*` with `metadata.json`; the
+  rewritten `rollback.sh` validates app/snapshot digests, snapshots the current
+  state first, restores same-schema snapshots, and refuses unsupported
+  downgrades (9→8 uses `rollback-v8`).
+- Catalog recommendations keep the established status but report
+  `production_ready: false`, `preview_only: true`, `max_rework: 0`; real routes
+  are no longer marked as production.
+- UI demo subprocesses use a bounded runner (timeout, 64 KiB output cap,
+  TERM→KILL); the menu text and icon share one status source with a 30 s stale
+  hint; review cards expose implementer/reviewer/findings to VoiceOver.
+
 ## 0.1.25 — 2026-11-25
 
 ### Added
