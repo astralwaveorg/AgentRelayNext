@@ -3,6 +3,23 @@
 所有用户可见变化记录在此。产品版本以 `crates/relay-daemon/Cargo.toml` 为准；里程碑
 （M1/M2/M2.5/M3）不是版本号。
 
+## 0.1.27 — 2026-11-25
+
+### Added
+
+- Provider retry on 429 / transient transport failures: up to 10 retries with a
+  30 s interval (`RELAY_RETRY_MAX`, `RELAY_RETRY_INTERVAL_MS`, bounded). When the
+  budget is exhausted the task fails explicitly with "重试上限内仍未成功：无法进行
+  下去，任务失败"; no artifact is produced.
+- Review fallback model: `RELAY_REVIEW_FALLBACK_MODEL` switches to another model
+  in the same OpenCode Go account when the quota is exhausted. The approval binds
+  the fallback model and usage records accept either the primary or fallback id.
+
+### Changed
+
+- The live route worker timeout is raised to 7 minutes so the bounded retry
+  budget fits inside one worker run.
+
 ## 0.1.26 — 2026-11-25
 
 ### Added

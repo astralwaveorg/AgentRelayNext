@@ -292,7 +292,8 @@ impl ServiceConfig {
         );
         self.workflow_template = TEMPLATE_IMPLEMENT_REVIEW.into();
         self.max_rework = 0;
-        self.worker_timeout_ms = 62_000;
+        // 10 retries x 30 s (bounded) plus the request itself must fit here.
+        self.worker_timeout_ms = 420_000;
         self.adapter_read_timeout_ms = 62_000;
         self.adapter_max_frame_bytes = 128 * 1024;
         self.live_routes = Some(routes);
@@ -665,6 +666,7 @@ pub(crate) fn classify_events(events: &AdapterRunEvents, exit_ok: bool) -> Resul
     match events.termination.as_deref() {
         Some("success") if exit_ok => Ok(()),
         Some("auth_failed") => Err("适配器认证失败：停止，不切换账号或计费路线".to_owned()),
+        Some("retry_exhausted") => Err("重试上限内仍未成功：无法进行下去，任务失败".to_owned()),
         Some("rate_limited") => Err("适配器限流：停止，不自动转备用路线".to_owned()),
         Some("unsupported_protocol") => Err("适配器报告 unsupported_protocol：安全结束".to_owned()),
         _ => Err("未识别的成功终止帧（收到的帧不足或类型不符）".to_owned()),
@@ -2904,6 +2906,7 @@ impl M1Service {
                     attempt_no,
                     crate::live_routes::Stage::Implement,
                     evidence.as_ref(),
+                    None,
                     None,
                 ) {
                     self.fail_adapter(task_id, attempt_no, task.revision + 2, code);

@@ -29,6 +29,9 @@ pub struct RoutePairSpec {
     go: SealedCli,
     endpoint: &'static str,
     review_model: String,
+    review_fallback: Option<String>,
+    retry_max: u32,
+    retry_interval: Duration,
 }
 #[derive(Debug, Clone)]
 struct SealedCli {
@@ -61,11 +64,22 @@ impl RoutePairSpec {
         if !cfg!(target_os = "macos") {
             return Err("PROJECT_ROUTE_REQUIRES_MACOS");
         }
+        let review_model = go_model()?;
+        let retry_max = std::env::var("RELAY_RETRY_MAX").ok();
+        let retry_interval = std::env::var("RELAY_RETRY_INTERVAL_MS").ok();
+        let (retry_max, retry_interval) =
+            route_pilot::retry_settings(retry_max.as_deref(), retry_interval.as_deref())?;
+        let fallback = std::env::var("RELAY_REVIEW_FALLBACK_MODEL").ok();
+        let review_fallback =
+            route_pilot::fallback_model_value(fallback.as_deref(), &review_model)?;
         let result = Self {
             claude: SealedCli::open(claude)?,
             go: SealedCli::open(go)?,
             endpoint: minimax_endpoint()?,
-            review_model: go_model()?,
+            review_model,
+            review_fallback,
+            retry_max,
+            retry_interval,
         };
         if result.claude.path == result.go.path || result.claude.sha256 == result.go.sha256 {
             return Err("PAIR_DISTINCT_CLIS_REQUIRED");
@@ -82,11 +96,15 @@ impl RoutePairSpec {
                 "data":["task goal","task brief","approved existing text files","baseline hash"],
                 "max_output_tokens":4096,"billing":"M Plan Credits may be used"},
             "review": {"tool":"OpenCode","model":self.review_model,"endpoint":GO_ENDPOINT,
+                "fallback_model":self.review_fallback,
                 "cli":self.go.path,"sha256":self.go.sha256,
                 "data":["task goal","diff","test pass status and rule IDs","diff and full receipt hashes"],
                 "max_output_tokens":2048,"billing":"Go subscription; Extra Usage must be disabled"},
             "max_stage_input_bytes": MAX_STAGE_INPUT, "max_files":16,
-            "max_rounds":1, "fallback":false, "auto_retry":false
+            "max_rounds":1,
+            "fallback":self.review_fallback.is_some(),
+            "auto_retry":{"enabled":self.retry_max>0,"max_retries":self.retry_max,
+                "interval_ms":self.retry_interval.as_millis() as u64}
         })
     }
 
@@ -134,6 +152,10 @@ impl LiveRoutes {
 
     pub(crate) fn review_model(&self) -> &str {
         &self.spec.review_model
+    }
+
+    pub(crate) fn review_fallback(&self) -> Option<&str> {
+        self.spec.review_fallback.as_deref()
     }
 
     pub(crate) fn selected(&self) -> SelectedPair {
@@ -193,6 +215,14 @@ impl LiveRoutes {
                     .and_then(|_| write.write_all(&keys.0))
                     .and_then(|_| write.write_all(&body));
             })?;
+        let spec = json!({
+            "endpoint": self.spec.endpoint,
+            "review_model": self.spec.review_model,
+            "review_fallback": self.spec.review_fallback,
+            "retry_max": self.spec.retry_max,
+            "retry_interval_ms": self.spec.retry_interval.as_millis() as u64,
+        })
+        .to_string();
         let mut command = Command::new(std::env::current_exe()?);
         command
             .arg("project-route-worker")
@@ -201,8 +231,7 @@ impl LiveRoutes {
             .arg(&cli.sha256)
             .arg(repo)
             .arg(managed)
-            .arg(self.spec.endpoint)
-            .arg(&self.spec.review_model)
+            .arg(spec)
             .env_clear()
             .stdin(Stdio::from(OwnedFd::from(read)));
         Ok(command)
@@ -251,9 +280,32 @@ fn body(stage: Stage, payload: &Value, review_model: &str) -> Pilot<Value> {
 }
 
 fn execute(args: &[String]) -> Pilot<(Value, Value)> {
-    let [role, exe, sha, repo, managed, endpoint, review_model] = args else {
+    let [role, exe, sha, repo, managed, spec] = args else {
         return Err("PROJECT_ROUTE_WORKER_ARGS");
     };
+    let spec = decode_json_value(spec).map_err(|_| "PROJECT_ROUTE_WORKER_ARGS")?;
+    let endpoint = spec["endpoint"]
+        .as_str()
+        .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
+    let review_model = spec["review_model"]
+        .as_str()
+        .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
+    let retry_max = spec["retry_max"]
+        .as_u64()
+        .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
+    let retry_interval_ms = spec["retry_interval_ms"]
+        .as_u64()
+        .ok_or("PROJECT_ROUTE_WORKER_ARGS")?;
+    if retry_max > u64::from(route_pilot::MAX_RETRIES_LIMIT)
+        || !(route_pilot::RETRY_INTERVAL_MIN_MS..=route_pilot::RETRY_INTERVAL_MAX_MS)
+            .contains(&retry_interval_ms)
+    {
+        return Err("PROJECT_ROUTE_WORKER_ARGS");
+    }
+    let retry_interval = Duration::from_millis(retry_interval_ms);
+    let review_fallback = spec["review_fallback"].as_str().map(str::to_owned);
+    route_pilot::fallback_model_value(review_fallback.as_deref(), review_model)
+        .map_err(|_| "PROJECT_ROUTE_WORKER_ARGS")?;
     // Only a supervising process that creates a separate worker group can
     // invoke the worker. All its descendants stay in that group.
     if rustix::process::getpgrp() != rustix::process::getpid() {
@@ -301,14 +353,24 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
         return Err("PROJECT_ROUTE_INPUT_LIMIT");
     }
     let payload = decode_json_value(&content).map_err(|_| "PROJECT_ROUTE_WORKER_INPUT")?;
-    let request = body(stage, &payload, review_model)?;
     let scope = ProcessScope::Tracked;
     let tmp = Temp::new()?;
-    route_pilot::go_meters(&route_pilot::upstream_scoped(
-        scope, go_key, GO_USAGE, None,
-    )?)?;
+    let meters = route_pilot::upstream_with_retry(
+        scope,
+        go_key,
+        GO_USAGE,
+        None,
+        retry_max as u32,
+        retry_interval,
+    )?;
+    let meter_quota = match route_pilot::go_meters(&meters) {
+        Ok(_) => false,
+        Err("GO_QUOTA_EXHAUSTED") if review_fallback.is_some() => true,
+        Err(code) => return Err(code),
+    };
     match stage {
         Stage::Implement => {
+            let request = body(stage, &payload, review_model)?;
             let prompt = request["messages"][0]["content"]
                 .as_str()
                 .ok_or("PROJECT_ROUTE_WORKER_INPUT")?;
@@ -321,30 +383,51 @@ fn execute(args: &[String]) -> Pilot<(Value, Value)> {
                     scope,
                 },
                 prompt,
-                || route_pilot::upstream_scoped(scope, claude_key, endpoint, Some(&request)),
+                || {
+                    route_pilot::upstream_with_retry(
+                        scope,
+                        claude_key,
+                        endpoint,
+                        Some(&request),
+                        retry_max as u32,
+                        retry_interval,
+                    )
+                },
             )?;
             let result =
                 decode_json_value(result.trim()).map_err(|_| "PROJECT_ROUTE_EDIT_PROTOCOL")?;
             Ok((result, json!({"actual_model":MODEL,"provider_usage":usage})))
         }
         Stage::Review => {
+            let model = if meter_quota {
+                review_fallback.as_deref().unwrap_or(review_model)
+            } else {
+                review_model
+            };
+            let request = body(stage, &payload, model)?;
             let mut usage = None;
             let result = crate::opencode_review::project_session(
                 &exe.path,
                 &tmp.0,
                 repo,
                 managed,
-                review_model,
+                model,
                 || {
-                    let bytes =
-                        route_pilot::upstream_scoped(scope, go_key, GO_ENDPOINT, Some(&request))?;
-                    let (report, evidence) = route_pilot::go_response(&bytes, review_model)?;
+                    let bytes = route_pilot::upstream_with_retry(
+                        scope,
+                        go_key,
+                        GO_ENDPOINT,
+                        Some(&request),
+                        retry_max as u32,
+                        retry_interval,
+                    )?;
+                    let (report, evidence) = route_pilot::go_response(&bytes, model)?;
                     usage = Some(evidence);
                     if report.len() > MAX_REVIEW_OUTPUT || decode_json_value(report.trim()).is_err()
                     {
                         return Err("PROJECT_ROUTE_REVIEW_PROTOCOL");
                     }
-                    Ok(route_pilot::fixture_for(review_model, &report))
+                    Ok(route_pilot::fixture_for(model, &report))
                 },
             )?;
             Ok((result, usage.ok_or("GO_BILLING_UNVERIFIED")?))
@@ -369,6 +452,7 @@ pub fn worker(args: &[String]) -> Result<(), u8> {
         Err(code) => {
             let termination = match code {
                 "UPSTREAM_AUTH" => "auth_failed",
+                "UPSTREAM_RETRY_EXHAUSTED" => "retry_exhausted",
                 "UPSTREAM_RATE_LIMIT" | "GO_QUOTA_EXHAUSTED" => "rate_limited",
                 _ => "unsupported_protocol",
             };
@@ -387,6 +471,7 @@ fn usage_record(
     stage: Stage,
     value: &Value,
     review_model: Option<&str>,
+    review_fallback: Option<&str>,
 ) -> Option<(&'static str, Value)> {
     let usage = &value["provider_usage"];
     let input = usage["input_tokens"].as_u64();
@@ -400,8 +485,9 @@ fn usage_record(
                 "charge_attribution":"unverified"}),
         )),
         Stage::Review => {
+            let primary = review_model?;
             let actual = value["actual_model"].as_str()?;
-            if actual != review_model? {
+            if actual != primary && Some(actual) != review_fallback {
                 return None;
             }
             let billing = &value["charge_attribution"];
@@ -434,9 +520,10 @@ pub(crate) fn record_usage(
     stage: Stage,
     event: Option<&Value>,
     review_model: Option<&str>,
+    review_fallback: Option<&str>,
 ) -> Result<(), &'static str> {
     let (kind, data) = event
-        .and_then(|value| usage_record(stage, value, review_model))
+        .and_then(|value| usage_record(stage, value, review_model, review_fallback))
         .ok_or("ROUTE_USAGE_UNVERIFIED")?;
     store
         .append_event(
@@ -457,7 +544,7 @@ mod tests {
     fn usage_audit_retains_only_allowed_fields_and_distinguishes_billing() {
         let implement = json!({"actual_model":MODEL,"provider_usage":{"input_tokens":31},
             "charge_attribution":"claimed","raw":"must never persist"});
-        let (kind, record) = usage_record(Stage::Implement, &implement, None).unwrap();
+        let (kind, record) = usage_record(Stage::Implement, &implement, None, None).unwrap();
         assert_eq!(kind, "route_implement_usage");
         assert_eq!(
             record,
@@ -468,8 +555,15 @@ mod tests {
 
         let mut review = json!({"actual_model":route_pilot::GO_MODEL,"provider_usage":{"input_tokens":33,"output_tokens":4},
             "charge_attribution":{"provider_reported_source":"go-plus","balance_charge_usd":0,"allowance_usd":0.002}});
+        let fallback_ok = usage_record(
+            Stage::Review,
+            &review,
+            Some("primary-model"),
+            Some(route_pilot::GO_MODEL),
+        );
+        assert!(fallback_ok.is_some(), "fallback model must be accepted");
         let (kind, record) =
-            usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL)).unwrap();
+            usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL), None).unwrap();
         assert_eq!(kind, "route_review_usage");
         assert_eq!(
             record,
@@ -477,8 +571,10 @@ mod tests {
             "provider_reported_source":"go-plus","balance_charge_usd":0,"allowance_usd":0.002})
         );
         review["charge_attribution"]["balance_charge_usd"] = json!(0.03);
-        assert!(usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL)).is_none());
-        assert!(usage_record(Stage::Review, &implement, Some(route_pilot::GO_MODEL)).is_none());
-        assert!(usage_record(Stage::Review, &review, None).is_none());
+        assert!(usage_record(Stage::Review, &review, Some(route_pilot::GO_MODEL), None).is_none());
+        assert!(
+            usage_record(Stage::Review, &implement, Some(route_pilot::GO_MODEL), None).is_none()
+        );
+        assert!(usage_record(Stage::Review, &review, None, None).is_none());
     }
 }

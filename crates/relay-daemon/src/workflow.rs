@@ -1093,6 +1093,7 @@ impl M1Service {
                     crate::live_routes::Stage::Review,
                     run.events.provider_evidence.as_ref(),
                     Some(routes.review_model()),
+                    routes.review_fallback(),
                 ) {
                     self.fail_adapter(task_id, attempt_no, revision, &format!("评审：{code}"));
                     return None;

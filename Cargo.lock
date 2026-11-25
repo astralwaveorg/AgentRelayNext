@@ -204,7 +204,7 @@ version = "0.1.0"
 
 [[package]]
 name = "relay-daemon"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "fs2",
  "libc",

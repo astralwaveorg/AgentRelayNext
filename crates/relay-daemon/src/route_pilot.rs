@@ -44,6 +44,59 @@ pub(crate) fn is_minimax_endpoint(endpoint: &str) -> bool {
     endpoint == ENDPOINT || endpoint == CN_ENDPOINT
 }
 
+/// Provider retry policy: 429 / transient transport only. Ten retries with a
+/// 30 s interval by default; bounds keep a worker from sleeping for hours.
+pub(crate) const DEFAULT_MAX_RETRIES: u32 = 10;
+pub(crate) const DEFAULT_RETRY_INTERVAL_MS: u64 = 30_000;
+pub(crate) const MAX_RETRIES_LIMIT: u32 = 20;
+pub(crate) const RETRY_INTERVAL_MIN_MS: u64 = 1_000;
+pub(crate) const RETRY_INTERVAL_MAX_MS: u64 = 120_000;
+
+pub(crate) fn retry_settings(
+    max_retries: Option<&str>,
+    interval_ms: Option<&str>,
+) -> Pilot<(u32, Duration)> {
+    let retries = match max_retries {
+        None => DEFAULT_MAX_RETRIES,
+        Some(value) => value.parse::<u32>().map_err(|_| "RETRY_SETTINGS_INVALID")?,
+    };
+    if retries > MAX_RETRIES_LIMIT {
+        return Err("RETRY_SETTINGS_INVALID");
+    }
+    let interval = match interval_ms {
+        None => DEFAULT_RETRY_INTERVAL_MS,
+        Some(value) => value.parse::<u64>().map_err(|_| "RETRY_SETTINGS_INVALID")?,
+    };
+    if !(RETRY_INTERVAL_MIN_MS..=RETRY_INTERVAL_MAX_MS).contains(&interval) {
+        return Err("RETRY_SETTINGS_INVALID");
+    }
+    Ok((retries, Duration::from_millis(interval)))
+}
+
+/// Which failures justify re-sending the same compiled sample: rate limiting
+/// and transient transport errors. Protocol/model/auth failures never retry.
+pub(crate) fn retryable(code: &str) -> bool {
+    matches!(code, "UPSTREAM_RATE_LIMIT" | "UPSTREAM_TRANSPORT")
+}
+
+/// Fallback model for the same account/tool. Empty/unset means "no fallback".
+/// It must not equal the implement model or the primary model of the stage.
+pub(crate) fn fallback_model_value(value: Option<&str>, primary: &str) -> Pilot<Option<String>> {
+    let Some(model) = value.filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    if model.len() > 128
+        || !model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+        || model == MODEL
+        || model == primary
+    {
+        return Err("FALLBACK_MODEL_INVALID");
+    }
+    Ok(Some(model.to_owned()))
+}
+
 pub(crate) fn go_model_value(value: Option<&str>) -> Pilot<String> {
     let model = value.unwrap_or(GO_MODEL);
     if model.is_empty()
@@ -519,6 +572,31 @@ pub(crate) fn upstream_scoped(
             Ok(body.as_bytes().to_vec())
         }
         _ => Err("UPSTREAM_PROTOCOL"),
+    }
+}
+
+/// Retry the same compiled request on 429 / transient transport failures.
+/// The sample is deterministic and already approved, so re-sending is safe;
+/// auth/protocol/model failures return immediately.
+pub(crate) fn upstream_with_retry(
+    scope: ProcessScope,
+    key: &str,
+    endpoint: &str,
+    request: Option<&Value>,
+    max_retries: u32,
+    interval: Duration,
+) -> Pilot<Vec<u8>> {
+    let mut retries = 0;
+    loop {
+        match upstream_scoped(scope, key, endpoint, request) {
+            Ok(bytes) => return Ok(bytes),
+            Err(code) if retryable(code) && retries < max_retries => {
+                retries += 1;
+                std::thread::sleep(interval);
+            }
+            Err(code) if retryable(code) => return Err("UPSTREAM_RETRY_EXHAUSTED"),
+            Err(code) => return Err(code),
+        }
     }
 }
 
@@ -1490,6 +1568,55 @@ mod tests {
         assert_eq!(
             go_model_value(Some(&"a".repeat(129))),
             Err("GO_MODEL_INVALID")
+        );
+    }
+
+    #[test]
+    fn retry_and_fallback_settings_are_bounded() {
+        assert_eq!(
+            retry_settings(None, None),
+            Ok((
+                DEFAULT_MAX_RETRIES,
+                Duration::from_millis(DEFAULT_RETRY_INTERVAL_MS)
+            ))
+        );
+        assert_eq!(
+            retry_settings(Some("3"), Some("1500")),
+            Ok((3, Duration::from_millis(1500)))
+        );
+        assert_eq!(
+            retry_settings(Some("21"), None),
+            Err("RETRY_SETTINGS_INVALID")
+        );
+        assert_eq!(
+            retry_settings(Some("x"), None),
+            Err("RETRY_SETTINGS_INVALID")
+        );
+        assert_eq!(
+            retry_settings(None, Some("500")),
+            Err("RETRY_SETTINGS_INVALID")
+        );
+        assert!(retryable("UPSTREAM_RATE_LIMIT"));
+        assert!(retryable("UPSTREAM_TRANSPORT"));
+        assert!(!retryable("UPSTREAM_AUTH"));
+        assert!(!retryable("UPSTREAM_PROTOCOL"));
+        assert_eq!(fallback_model_value(None, "primary"), Ok(None));
+        assert_eq!(fallback_model_value(Some(""), "primary"), Ok(None));
+        assert_eq!(
+            fallback_model_value(Some("alt-model"), "primary"),
+            Ok(Some("alt-model".to_owned()))
+        );
+        assert_eq!(
+            fallback_model_value(Some("primary"), "primary"),
+            Err("FALLBACK_MODEL_INVALID")
+        );
+        assert_eq!(
+            fallback_model_value(Some(MODEL), "primary"),
+            Err("FALLBACK_MODEL_INVALID")
+        );
+        assert_eq!(
+            fallback_model_value(Some("bad model"), "primary"),
+            Err("FALLBACK_MODEL_INVALID")
         );
     }
 

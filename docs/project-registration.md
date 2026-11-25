@@ -35,7 +35,7 @@
 
     relayctl project-setup route-preview <项目ID> <claude绝对路径> <opencode绝对路径>
 
-返回的 approval 只适用于这个项目、允许写入的范围、验证规则和两份实际 CLI 二进制。只有确认 MiniMax 可用 M Plan Credits、OpenCode Go 的 Extra Usage 已关闭，并在 shell 中导出两份专用密钥（`MINIMAX_API_KEY`、`OC_API_KEY`，例如写入 `~/.zshrc`）时，才启用。默认实现端点为国际站；中国大陆站账户先导出 `RELAY_MINIMAX_ENDPOINT=https://api.minimax.cn/anthropic/v1/messages`；评审模型默认 `deepseek-v4.1-flash`，可用 `RELAY_GO_MODEL` 选择工作区已启用的模型。预览会绑定实际端点与模型：
+返回的 approval 只适用于这个项目、允许写入的范围、验证规则和两份实际 CLI 二进制。只有确认 MiniMax 可用 M Plan Credits、OpenCode Go 的 Extra Usage 已关闭，并在 shell 中导出两份专用密钥（`MINIMAX_API_KEY`、`OC_API_KEY`，例如写入 `~/.zshrc`）时，才启用。默认实现端点为国际站；中国大陆站账户先导出 `RELAY_MINIMAX_ENDPOINT=https://api.minimax.cn/anthropic/v1/messages`；评审模型默认 `deepseek-v4.1-flash`，可用 `RELAY_GO_MODEL` 选择工作区已启用的模型；`RELAY_RETRY_MAX`/`RELAY_RETRY_INTERVAL_MS` 控制 429/传输重试，`RELAY_REVIEW_FALLBACK_MODEL` 配置同账户额度耗尽备用模型。预览会绑定实际端点、模型与备用模型：
 
     set -o pipefail
     {
