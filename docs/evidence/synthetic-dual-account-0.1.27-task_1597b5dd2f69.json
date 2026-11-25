@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic_acceptance",
+  "created_at": "2026-11-25T10:52:33Z",
+  "source": "live-project-acceptance prepare/run",
+  "task_id": "task_1597b5dd2f69",
+  "status": "completed",
+  "task_state": "completed",
+  "exit_reason": null,
+  "route_approval_sha256": "6b8f077daaf33ea766f838a34f85c250c0fdaeffa9e5220e4e8d6bc59c538831",
+  "base_oid": "0f5aa3b1d8e7f4c24fc9a346e0d6420f361e814f",
+  "project_id": "proj_1ddb256d805dad6d1a71",
+  "clis": {
+    "claude": "2.1.326",
+    "opencode": "opencode"
+  },
+  "models": {
+    "route_implement_usage": {
+      "actual_model": "MiniMax-M3.1-Flash",
+      "charge_attribution": "unverified",
+      "provider_reported_source": null
+    },
+    "route_review_usage": {
+      "actual_model": "deepseek-v4.1-flash",
+      "charge_attribution": null,
+      "provider_reported_source": "go"
+    }
+  },
+  "usage": {
+    "route_implement_usage": {
+      "input_tokens": 259,
+      "output_tokens": 102,
+      "cache_creation_input_tokens": null,
+      "cache_read_input_tokens": 128
+    },
+    "route_review_usage": {
+      "input_tokens": 313,
+      "output_tokens": 334,
+      "allowance_usd": 0.00029682,
+      "balance_charge_usd": 0
+    }
+  },
+  "stages": [
+    {
+      "stage": "implement",
+      "round": 1,
+      "state": "succeeded"
+    },
+    {
+      "stage": "review",
+      "round": 1,
+      "state": "succeeded"
+    },
+    {
+      "stage": "verify",
+      "round": 1,
+      "state": "succeeded"
+    }
+  ],
+  "digests": {
+    "diff_sha256": "0be10a1750cfdf509b781719b432e57fcac10e0f7432b569c3d9ee0491ca4c74",
+    "test_receipt_sha256": "4d4f5d5c131e71aa543aefd40f4628fce8a1d3126de1a8e80cdc6f578db1ab8a"
+  },
+  "timeline": [
+    {
+      "seq": 1,
+      "kind": "submitted",
+      "state": "queued",
+      "reason": null
+    },
+    {
+      "seq": 2,
+      "kind": "claim",
+      "state": "preparing",
+      "reason": null
+    },
+    {
+      "seq": 3,
+      "kind": "prepare_launch",
+      "state": "launching",
+      "reason": null
+    },
+    {
+      "seq": 4,
+      "kind": "spawned",
+      "state": "running",
+      "reason": null
+    },
+    {
+      "seq": 5,
+      "kind": "route_implement_usage",
+      "state": "running",
+      "reason": "{\"actual_model\": \"MiniMax-M3.1-Flash\", \"cache_creation_input_tokens\": null, \"cache_read_input_tokens\": 128, \"charge_attribution\": \"unverified\", \"input_tokens\": 259, \"output_tokens\": 102}"
+    },
+    {
+      "seq": 6,
+      "kind": "verify_round",
+      "state": "running",
+      "reason": "round=1"
+    },
+    {
+      "seq": 7,
+      "kind": "review_round",
+      "state": "running",
+      "reason": "round=1;reviewer=opencode"
+    },
+    {
+      "seq": 8,
+      "kind": "route_review_usage",
+      "state": "running",
+      "reason": "{\"actual_model\": \"deepseek-v4.1-flash\", \"allowance_usd\": 0.00029682, \"balance_charge_usd\": 0, \"input_tokens\": 313, \"output_tokens\": 334, \"provider_reported_source\": \"go\"}"
+    },
+    {
+      "seq": 9,
+      "kind": "review_passed",
+      "state": "running",
+      "reason": "round=1"
+    },
+    {
+      "seq": 10,
+      "kind": "worker_succeeded",
+      "state": "verifying",
+      "reason": null
+    },
+    {
+      "seq": 11,
+      "kind": "verification_passed",
+      "state": "awaiting_review",
+      "reason": null
+    },
+    {
+      "seq": 12,
+      "kind": "review_accepted",
+      "state": "completed",
+      "reason": null
+    }
+  ],
+  "redactions": [
+    "absolute binary and workspace paths (basenames only)",
+    "credentials and account identifiers",
+    "prompts, patches and raw provider bodies",
+    "unexpected free-text failure reasons"
+  ]
+}
