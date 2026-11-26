@@ -3296,6 +3296,14 @@ fn register_artifact_in_tx(
         }
         other => other.into(),
     })?;
+    // 3. A10：制品登记与状态推进成功后，在同一事务内统一解封本 attempt 的
+    //    待确认派发门（允许纯存储单测未建派发门行，因此影响 0 行不报错）。
+    tx.execute(
+        "UPDATE dispatch_gate
+         SET state = 'released', reason = '制品已登记，受控进程已确认退出', updated_at = ?1
+         WHERE task_id = ?2 AND attempt_no = ?3 AND state = 'pending'",
+        params![input.now, input.task_id, i64::from(input.attempt_no)],
+    )?;
     Ok(outcome)
 }
 

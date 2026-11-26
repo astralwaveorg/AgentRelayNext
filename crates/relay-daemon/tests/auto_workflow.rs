@@ -1401,3 +1401,62 @@ fn registered_project_bounds_new_plans_and_queued_work_after_configuration_drift
         .unwrap();
     assert!(contents.status.success() && contents.stdout.is_empty());
 }
+
+/// A10：gate 终态收敛到制品登记单一收口，消除 review_active 与
+/// implementation_only 的不对称；成功登记后 gate 已解封且后续任务可立即领取，
+/// 验证失败路径同样解封不留孤儿 pending。
+#[test]
+fn implementation_only_success_and_failure_converge_gate_release() {
+    let env = setup();
+    let store = open_store(&env);
+
+    let mut cfg = base_config(&env, 0);
+    cfg.workflow_template = relay_daemon::service::TEMPLATE_IMPLEMENTATION_ONLY.to_owned();
+    let service = M1Service::new(Arc::clone(&store), cfg);
+
+    let (task_a, _) = plan_and_submit(&env, &service, "a1000000-0000-4000-8000-000000000001");
+    let (task_b, _) = plan_and_submit(&env, &service, "a1000000-0000-4000-8000-000000000002");
+
+    run_claim_to_end(&service);
+    assert_eq!(
+        store.get_task(&task_a).unwrap().unwrap().state.to_string(),
+        "awaiting_review",
+        "implementation_only 成功路径应进入 awaiting_review"
+    );
+    assert!(
+        store.get_artifact(&task_a, 1).unwrap().is_some(),
+        "A 应已登记制品"
+    );
+    assert!(
+        store.list_pending_gates().unwrap().is_empty(),
+        "A 成功登记制品后必须已解封派发门"
+    );
+
+    // B 必须可立即领取并完成，证明 A 的 gate 未遗留阻断。
+    run_claim_to_end(&service);
+    assert_eq!(
+        store.get_task(&task_b).unwrap().unwrap().state.to_string(),
+        "awaiting_review",
+        "B 应在 A 解封后顺利进入 awaiting_review"
+    );
+    assert!(store.list_pending_gates().unwrap().is_empty());
+
+    // 验证失败路径：同样收口解封 gate，不出具制品，不阻塞后续任务。
+    let mut fail_cfg = base_config(&env, 1);
+    fail_cfg.workflow_template = relay_daemon::service::TEMPLATE_IMPLEMENTATION_ONLY.to_owned();
+    let fail_service = M1Service::new(Arc::clone(&store), fail_cfg);
+    let (task_c, _) = plan_and_submit(&env, &fail_service, "a1000000-0000-4000-8000-000000000003");
+    run_claim_to_end(&fail_service);
+    assert_eq!(
+        store.get_task(&task_c).unwrap().unwrap().state.to_string(),
+        "failed",
+        "验证失败应进入 failed"
+    );
+    assert!(store.get_artifact(&task_c, 1).unwrap().is_none());
+    assert!(
+        store.list_pending_gates().unwrap().is_empty(),
+        "验证失败后受控子进程已退出，不得遗留 pending gate"
+    );
+
+    fs::remove_dir_all(&env.dir).ok();
+}

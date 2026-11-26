@@ -2420,6 +2420,14 @@ impl M1Service {
                         "启动许可前已取消",
                         &now(),
                     );
+                } else {
+                    let _ = self.store.commit_spawn_not_started(
+                        task_id,
+                        attempt_no,
+                        task.revision + 1,
+                        &format!("首轮实现未获得阶段启动许可：{e}"),
+                        &now(),
+                    );
                 }
                 return;
             }
@@ -2815,12 +2823,42 @@ impl M1Service {
                     std::thread::sleep(Duration::from_millis(30));
                 }
                 Err(_) => {
-                    self.fail_verifying(
-                        task_id,
-                        attempt_no,
-                        task.revision + 2,
-                        "mock 子进程等待失败",
-                    );
+                    let confirmed =
+                        self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
+                            == ReclaimOutcome::Confirmed;
+                    self.reap_child(&mut child);
+                    if confirmed {
+                        let _ = self
+                            .store
+                            .resolve_managed_group(task_id, attempt_no, &now());
+                        let _ = self.store.release_dispatch_gate(
+                            task_id,
+                            attempt_no,
+                            "子进程等待失败但已确认退出",
+                            &now(),
+                        );
+                        self.fail_worker(task_id, attempt_no, task.revision + 2, "子进程等待失败");
+                    } else {
+                        let _ = self.store.mark_group_blocking(
+                            task_id,
+                            attempt_no,
+                            "子进程等待失败且退出未确认",
+                            &now(),
+                        );
+                        let _ = self.store.set_gate_reason(
+                            task_id,
+                            attempt_no,
+                            "子进程等待失败且退出未确认，不自动解封",
+                            &now(),
+                        );
+                        let _ = self.store.transition(TransitionInput {
+                            task_id,
+                            expected_active_attempt: attempt_no,
+                            expected_revision: task.revision + 2,
+                            event: Event::MarkInterrupted,
+                            now: &now(),
+                        });
+                    }
                     return;
                 }
             }
@@ -2853,13 +2891,7 @@ impl M1Service {
         if !exit_ok && !adapter_mode {
             // Without adapter output there is no terminal frame to classify.
             release_held_gate("实现者非零退出：受控进程已确认退出");
-            let _ = self.store.transition(TransitionInput {
-                task_id,
-                expected_active_attempt: attempt_no,
-                expected_revision: task.revision + 2,
-                event: Event::WorkerFailed,
-                now: &now(),
-            });
+            self.fail_worker(task_id, attempt_no, task.revision + 2, "实现者非零退出");
             if let Some(handle) = stdout_handle.take() {
                 let _ = handle.is_finished();
             }
@@ -3012,7 +3044,6 @@ impl M1Service {
                 Some(output) => output,
                 None => return,
             };
-            release_held_gate("自动链路轮次结束：受控子进程均已确认退出");
             if self
                 .store
                 .transition(TransitionInput {
@@ -3024,6 +3055,7 @@ impl M1Service {
                 })
                 .is_err()
             {
+                release_held_gate("自动链路已结束，状态未推进到验证");
                 return;
             }
             collected = output.collected;
@@ -3180,7 +3212,6 @@ impl M1Service {
         let collected = match collect_diff(worktree, &plan.base_oid, scope) {
             Ok(c) => c,
             Err(e) => {
-                supervisor.release_after_stop();
                 self.fail_verifying(
                     task_id,
                     attempt_no,
@@ -3212,7 +3243,6 @@ impl M1Service {
                 return None;
             }
             Err(e) => {
-                supervisor.release_after_stop();
                 self.fail_verifying(
                     task_id,
                     attempt_no,
@@ -3222,7 +3252,6 @@ impl M1Service {
                 return None;
             }
         };
-        supervisor.release_after_stop();
         if receipt.status != "pass" {
             // 验证失败：不出具可验收制品（06）。
             self.fail_verifying(
@@ -3297,18 +3326,26 @@ impl M1Service {
         eprintln!("relay daemon: attempt {task_id}#{attempt_no} 执行失败：{reason}");
     }
 
-    /// verifying 阶段失败（差异/收据/发布/登记）。
+    /// verifying 阶段失败（差异/收据/发布/登记）：受控子进程已确认退出，统一收口解封 gate。
     fn fail_verifying(&self, task_id: &str, attempt_no: u32, expected_revision: u64, reason: &str) {
+        let now = now_rfc3339();
         let _ = self.store.fail_worker_with_reason(
             TransitionInput {
                 task_id,
                 expected_active_attempt: attempt_no,
                 expected_revision,
                 event: Event::VerificationFailed,
-                now: &now_rfc3339(),
+                now: &now,
             },
             &bounded_reason(reason),
         );
+        let _ = self.store.release_dispatch_gate(
+            task_id,
+            attempt_no,
+            "验证或制品登记失败：受控进程已确认退出",
+            &now,
+        );
+        self.confirm_workers_stopped(task_id, attempt_no);
         eprintln!("relay daemon: attempt {task_id}#{attempt_no} 验证失败：{reason}");
     }
 
