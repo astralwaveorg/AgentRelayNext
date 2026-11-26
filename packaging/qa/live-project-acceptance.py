@@ -49,11 +49,18 @@ def main():
     env.update({f"GIT_{role}_{key}": val for role in ("AUTHOR", "COMMITTER")
                 for key, val in (("NAME", "Relay QA"), ("EMAIL", "qa@example.invalid"))})
     # Optional route overrides: the sandboxed child starts from a cleared
-    # environment, so pass the pinned endpoint and review model through.
-    if endpoint := os.environ.get("RELAY_MINIMAX_ENDPOINT"):
-        env["RELAY_MINIMAX_ENDPOINT"] = endpoint
-    if review_model := os.environ.get("RELAY_GO_MODEL"):
-        env["RELAY_GO_MODEL"] = review_model
+    # environment, so pass approved route overrides through.
+    for key in (
+        "RELAY_MINIMAX_ENDPOINT",
+        "RELAY_IMPLEMENT_MODEL",
+        "RELAY_IMPLEMENT_FALLBACK_MODEL",
+        "RELAY_GO_MODEL",
+        "RELAY_REVIEW_FALLBACK_MODEL",
+        "RELAY_RETRY_MAX",
+        "RELAY_RETRY_INTERVAL_MS",
+    ):
+        if value := os.environ.get(key):
+            env[key] = value
     git = lambda directory, *a: capture(["/usr/bin/git", "-C", directory, *a], env)
     state = root / "sample.json"
     result = root / "evidence.json"

@@ -2,7 +2,7 @@
 //! can attach this configuration to a daemon; the normal config loader cannot.
 use crate::route_pilot::{
     self, cli_digest, go_model, go_model_value, is_minimax_endpoint, minimax_endpoint,
-    subscription_key, Pilot, ProcessScope, StageSandbox, Temp, GO_ENDPOINT, GO_USAGE, MODEL,
+    subscription_key, Pilot, ProcessScope, StageSandbox, Temp, GO_ENDPOINT, GO_USAGE,
 };
 use crate::service::AdapterProbeReport;
 use crate::workflow::{AdapterCandidate, SelectedPair};
@@ -114,7 +114,7 @@ impl RoutePairSpec {
                 "max_output_tokens":2048,"billing":"Go subscription; Extra Usage must be disabled"},
             "max_stage_input_bytes": MAX_STAGE_INPUT, "max_files":16,
             "max_rounds":1,
-            "fallback":self.review_fallback.is_some(),
+            "fallback":self.review_fallback.is_some() || self.implement_fallback.is_some(),
             "auto_retry":{"enabled":self.retry_max>0,"max_retries":self.retry_max,
                 "interval_ms":self.retry_interval.as_millis() as u64}
         })
@@ -194,7 +194,12 @@ impl LiveRoutes {
             },
         };
         SelectedPair {
-            implementer: candidate("claude-code", MODEL, "implement", &self.spec.claude.path),
+            implementer: candidate(
+                "claude-code",
+                &self.spec.implement_model,
+                "implement",
+                &self.spec.claude.path,
+            ),
             reviewer: Some(candidate(
                 "opencode",
                 &self.spec.review_model,
@@ -286,16 +291,16 @@ impl Stage {
     }
 }
 
-fn body(stage: Stage, payload: &Value, review_model: &str) -> Pilot<Value> {
+fn body(stage: Stage, payload: &Value, model: &str) -> Pilot<Value> {
     let encoded = serde_json::to_string(payload).map_err(|_| "PROJECT_ROUTE_INPUT")?;
     if encoded.len() > MAX_STAGE_INPUT {
         return Err("PROJECT_ROUTE_INPUT_LIMIT");
     }
     Ok(match stage {
-        Stage::Implement => json!({"model":MODEL,"max_tokens":4096,"stream":true,
+        Stage::Implement => json!({"model":model,"max_tokens":4096,"stream":true,
             "output_config":{"effort":"low"},
             "messages":[{"role":"user","content":format!("{IMPLEMENT_INSTRUCTIONS}\nData: {encoded}")}]}),
-        Stage::Review => json!({"model":review_model,"max_tokens":2048,"stream":false,
+        Stage::Review => json!({"model":model,"max_tokens":2048,"stream":false,
             "reasoning_effort":"low",
             "messages":[{"role":"user","content":format!("{REVIEW_INSTRUCTIONS}\nData: {encoded}")}]}),
     })
@@ -604,6 +609,16 @@ pub(crate) fn record_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::route_pilot::MODEL;
+
+    #[test]
+    fn request_body_uses_configured_model_for_both_stages() {
+        let payload = json!({"task": "demo"});
+        let imp = body(Stage::Implement, &payload, "MiniMax-M3.1-Pro").unwrap();
+        assert_eq!(imp["model"], json!("MiniMax-M3.1-Pro"));
+        let rev = body(Stage::Review, &payload, "deepseek-v4.1-flash").unwrap();
+        assert_eq!(rev["model"], json!("deepseek-v4.1-flash"));
+    }
 
     #[test]
     fn usage_audit_retains_only_allowed_fields_and_distinguishes_billing() {
