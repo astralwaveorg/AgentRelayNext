@@ -271,13 +271,7 @@ enum Wording {
     }
 
     static func service(_ raw: String, pending: Int, blocking: Int) -> String {
-        switch raw {
-        case "ready": return "服务 ready"
-        case "degraded": return "服务 degraded（派发门：待确认 \(pending)，阻断 \(blocking)）"
-        case "maintenance": return "服务维护中（暂停写入与派发）"
-        case "archive": return "只读档案（不启动任务）"
-        default: return "服务 \(raw)"
-        }
+        MenuStatus.serviceLabel(raw, pending: pending, blocking: blocking)
     }
 
     static func short(_ digest: String?) -> String {
@@ -379,7 +373,7 @@ enum ReviewVerdict: String {
 
 @MainActor
 final class Model: ObservableObject {
-    enum Conn: String { case inactive, connecting, ready, degraded, failed, maintenance, archive }
+    typealias Conn = ServiceConnection
     @Published var conn: Conn = .inactive
     @Published var overview: Overview?
     @Published var message: String?
@@ -427,14 +421,10 @@ final class Model: ObservableObject {
 
     /// 菜单文字与图标使用同一数据源：连接失败/过期时不得继续显示“正常”。
     var menuStatus: String {
-        if conn == .inactive { return "服务不可用（未连接）" }
-        if conn == .failed { return "服务不可用" + (message.map { "：\($0)" } ?? "") }
-        guard let overview else { return "连接中…" }
-        let base = Wording.service(overview.state, pending: overview.pending, blocking: overview.blocking)
-        if let lastUpdated, Date().timeIntervalSince(lastUpdated) > 30 {
-            return "状态可能已过期：\(base)（最后更新 \(lastUpdated.formatted(date: .omitted, time: .shortened))）"
+        let snapshot = overview.map {
+            MenuStatusSnapshot(state: $0.state, pending: $0.pending, blocking: $0.blocking)
         }
-        return base
+        return MenuStatus.text(conn: conn, message: message, snapshot: snapshot, lastUpdated: lastUpdated)
     }
 
     func checkPreview() async {
@@ -1665,15 +1655,7 @@ struct RelayApp: App {
         MenuBarExtra {
             RelayMenu(model: model)
         } label: {
-            Label("Agent Relay", systemImage: {
-                switch model.conn {
-                case .degraded, .maintenance: return "exclamationmark.triangle"
-                case .inactive, .failed: return "bolt.horizontal.circle"
-                case .connecting: return "arrow.triangle.2.circlepath"
-                case .archive: return "archivebox"
-                case .ready: return "point.3.connected.trianglepath.dotted"
-                }
-            }())
+            Label("Agent Relay", systemImage: MenuStatus.symbolName(for: model.conn))
         }
         .menuBarExtraStyle(.window)
     }

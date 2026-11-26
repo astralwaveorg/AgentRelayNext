@@ -33,4 +33,14 @@ fi
 
 cargo fmt --all --check
 cargo clippy --workspace --locked --offline --all-targets -- -D warnings
-exec cargo test --workspace --locked --offline
+cargo test --workspace --locked --offline
+if [ "$(uname -s)" = Darwin ] && command -v swiftc >/dev/null 2>&1; then
+    ui_test_tmp="$(mktemp -d /tmp/relay-ui-test.XXXXXX)"
+    trap 'rm -rf "$ui_test_tmp"' EXIT
+    swiftc -swift-version 5 -parse-as-library \
+        -module-cache-path "$ui_test_tmp/module-cache" \
+        -o "$ui_test_tmp/ui-status-test" \
+        ui/RelayTaskWindow/MenuStatus.swift \
+        packaging/qa/ui-status-test.swift
+    "$ui_test_tmp/ui-status-test"
+fi
