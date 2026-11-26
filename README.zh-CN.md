@@ -1,6 +1,6 @@
 # Agent Relay
 
-**一个编码 Agent 写，另一个独立评审，证据交给你。**
+一个编码 Agent 写代码，另一个独立评审，把可核验的证据交给你。
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -8,101 +8,98 @@
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20Apple%20Silicon-111827.svg)](#环境要求)
 [![Built with Rust + SwiftUI](https://img.shields.io/badge/built%20with-Rust%20%2B%20SwiftUI-f97316.svg)](#架构)
 [![CI](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml/badge.svg)](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-0.1.24-2a7fff.svg)](docs/release-notes-0.1.24.md)
+[![Release](https://img.shields.io/badge/release-v0.1.27--preview-2a7fff.svg)](https://github.com/astralwaveorg/AgentRelayNext/releases/latest)
 
 <img src="docs/assets/hero.svg" alt="Agent Relay：两个 AI 编码工具的本地交付流程" width="100%">
 
-Agent Relay 是一个**本地优先的 macOS 双 AI 编码工具**。一个 Agent 在隔离的 Git
-worktree 中实现改动，另一个工具和模型只读评审同一份补丁；Relay 运行你批准的本地
-测试，把补丁、收据和评审结论绑定在一起，最后交给你验收。它不会自动合并、推送或部署。
+Agent Relay 是一个运行在 macOS 本机的双 AI 编码中继工具。它提供 MCP stdio 桥、CLI 和原生 SwiftUI 窗口。
 
-它面向已经同时使用两个编码客户端、但厌倦了手动复制上下文、补丁和测试结果的开发者。
+每次任务按四步在本地执行：
 
-## 为什么用它
+1. 实现 Agent 在独立的 detached Git worktree 中修改代码。你的主工作区保持原样。
+2. Relay 按固定 `argv` 执行你批准的本地测试命令，不经过 shell，并清空环境变量。测试结果保存为带摘要的收据。
+3. 另一个工具和模型只读取这份补丁与测试收据，输出绑定双摘要的评审报告。
+4. 你在 SwiftUI 窗口、CLI 或 MCP 客户端里查看补丁、收据和评审意见，再决定接受或拒绝。Relay 不会自动合并、推送或部署。
 
-- **两个独立角色。** 一个写，另一个评审；同一个工具或同一个模型不算独立评审。
-- **给证据，不给聊天记录。** 补丁、测试收据、评审报告用 SHA-256 绑定到同一候选。
-- **主工作树不动。** 实现发生在受管 worktree；主 checkout 的 HEAD、index 和文件不变。
-- **默认本地。** daemon、CLI、SwiftUI 窗口、SQLite 和 MCP 桥都在这台 Mac 上，没有托管中转。
+## 核心特点
+
+- 独立评审。实现者和评审者必须使用不同工具，且归一化后的模型不同。provider 前缀和别名视为同一模型。
+- 摘要绑定证据。`diff.patch`、`test_receipt.json` 和 `review.json` 通过 SHA-256 绑定到同一候选。评审后候选发生任何变化都会阻止交付。
+- 主工作区不动。所有改动都在受管 worktree 中完成。主 checkout 的 `HEAD`、暂存区和文件不变。
+- 本地无头守护进程。Rust 守护进程（`relayctl`）监听本机 Unix socket 并提供 MCP stdio 桥（`relayctl mcp`）。原生 SwiftUI 窗口负责任务查看和菜单栏状态展示。
+- 失败关闭设计。运行时包含持久启动栅栏、派发门、有界进程组回收（先 `TERM` 后 `KILL`）、加固的 `/usr/bin/git` 调用、`0700`/`0600` 权限隔离，以及零网络监听。
 
 <img src="docs/assets/window.svg" alt="Agent Relay 任务窗口：阶段时间线、评审卡和补丁" width="100%">
 
 *合成 UI 预览，不包含真实项目、账户或任务数据。*
 
-## 工作方式
+## 工作流程
 
 <img src="docs/assets/workflow.svg" alt="实现、本地验证、独立评审和人工验收" width="100%">
 
 ```text
-Claude Code + MiniMax-M3.1-Flash  ── 实现 ──┐
-                                            ▼
-                                  隔离 Git worktree
-                                            │
-                              固定本地测试 + 收据
-                                            │
-                                            ▼
-OpenCode Go + DeepSeek-V4.1-Flash  ── 只读评审补丁 + 收据
-                                            │
-                                            ▼
-                              补丁 + 测试收据 + 评审证据
-                                            │
-                                            ▼
-                                     你验收或拒绝
+Host / Codex / Shell ── MCP stdio / CLI / SwiftUI ──> relay daemon（本机 Unix socket）
+                                                             │
+              ┌──────────────────────────────────────────────┘
+              ▼
+   1. 实现（受管 Git worktree，写入路径白名单）
+              │
+              ▼
+   2. 验证（固定本地测试命令，无 shell -> test_receipt.json + SHA-256）
+              │
+              ▼
+   3. 评审（独立模型只读审查 diff + 收据 -> 摘要绑定评审报告）
+              │
+              ▼
+   4. 验收（人工审阅证据并决定接受或拒绝）
 ```
-
-首版真实路线固定为：
-
-- **Claude Code + MiniMax-M3.1-Flash** 实现
-- 批准的本地命令验证（固定 argv，不经 shell）
-- **OpenCode Go + deepseek-v4.1-flash** 独立只读评审
-- 一个任务、一次 attempt、无自动重试或降级
-
-离线演示使用两个本地 fake adapter，不需要账户或网络。
 
 ## 快速开始
 
-### 1. 下载 DMG
+不需要 API Key，三分钟左右就能跑通完整离线演示。
 
-从 [最新 GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) 下载 `RelayTaskWindow-0.1.24.dmg`，核对摘要：
+### 1. 安装预览版 DMG
+
+从 [GitHub Releases](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) 下载 `RelayTaskWindow-<version>.dmg` 和 `SHA256SUMS`。核对校验和后，把 `RelayTaskWindow.app` 拖入 `Applications`：
 
 ```sh
-shasum -a 256 RelayTaskWindow-0.1.24.dmg
+shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
-预期 SHA-256 见附件 `.sha256` 或 `SHA256SUMS`。DMG 未签名、未公证：首次启动请按住 Control 点击
-App 选择“打开”，或到“系统设置 → 隐私与安全性”放行。不要全局关闭 Gatekeeper。
+> **未签名开发预览。** 本项目没有 Apple Developer ID，DMG 未签名也未公证。首次启动请按住 Control 点击 `RelayTaskWindow.app` 选择 **打开**，或在 **系统设置 → 隐私与安全性** 中点击“仍要打开”。不要全局关闭 Gatekeeper。
 
-### 2. 安装
+### 2. 启用本机服务
 
-打开 DMG，把 `RelayTaskWindow.app` 拖到 `Applications`，然后启动。
-
-### 3. 检查本地服务
+打开 **RelayTaskWindow** 后点击 **启用本地预览**，或在终端运行：
 
 ```sh
 relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayctl"
-"$relayctl" doctor --instance-dir "$HOME/.agent-relay-next/instance"
-"$relayctl" mcp-verify --socket "$HOME/.agent-relay-next/instance/relay.sock"
+"$relayctl" local-preview enable
+"$relayctl" local-preview status
 ```
 
-### 4. 运行离线演示
+`enable` 会初始化 `~/.agent-relay-next/`，安装带日志轮转的包装脚本，注册当前用户 LaunchAgent，并自动执行 `doctor` 和 `mcp-verify`。随时可以运行 `local-preview disable` 停用服务并保留数据。
 
-在窗口中选择“运行离线演示”。它会创建合成任务，完成实现、本地验证、独立评审、
-一次返工（仅演示夹具）和人工验收；真实项目路线只跑一次 attempt，不自动返工。
-演示不调用真实模型，也不读取你的项目。
+### 3. 运行离线演示
 
-## 功能
+在任务窗口点击 **运行离线演示**。程序会用离线替身跑完一轮合成任务：实现、本地测试验证、独立评审、自动返工一轮和人工验收。全程不联网，不需要任何账户。
 
-| 领域 | 内容 |
-| --- | --- |
-| 编排 | 计划、提交、串行派发、最终人工验收；真实路线单 attempt、不自动返工（离线演示夹具演示一次返工） |
-| 隔离 | 从固定 commit 创建 detached Git worktree；保护主 checkout |
-| 验证 | 固定 executable/argv、无 shell、清空环境、有界输出和超时 |
-| 独立评审 | 不同工具和归一化模型；只读输入；摘要绑定报告 |
-| 证据 | 补丁、测试收据、评审报告、用量事件、阶段时间线 |
-| 恢复 | 持久启动栅栏、派发门、进程组回收、中断恢复 |
-| 本地控制 | Unix socket IPC、MCP stdio 桥、SwiftUI 任务窗口、菜单栏 |
-| 运维 | 2 GiB 配额、20 任务队列上限、预览优先清理、5 MiB × 5 日志轮转 |
-| 模型目录 | 版本化内置条目与确定性角色推荐 |
+### 4. 接入 MCP 客户端（可选）
+
+在 Codex、Claude Desktop 等支持 MCP 的客户端中加入本地 stdio 桥：
+
+```json
+{
+  "mcpServers": {
+    "agent-relay": {
+      "command": "/Users/<你的用户名>/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayctl",
+      "args": ["mcp", "--socket", "/Users/<你的用户名>/.agent-relay-next/instance/relay.sock"]
+    }
+  }
+}
+```
+
+升级、回滚、清理与排障见 [快速上手与运维指南](docs/getting-started.md)。在本地 Git 仓库使用真实模型见 [真实路线与项目登记](docs/real-routes.md)。
 
 ## 架构
 
@@ -113,99 +110,65 @@ SwiftUI 窗口 ─────────────── 本机 Unix RPC ─
                                                              ▼
                                                         relay daemon
                                                              │
-               ┌─────────────────────────────────────────────┼────────────────────┐
-               ▼                                             ▼                    ▼
-            SQLite                                      受管 worktree         本地验证
-      plans/tasks/events                            detached Git checkout   固定 argv，无 shell
-      stage_runs/artifacts                          diff + 收据             进程组监管
+                    ┌────────────────────────────────────────┼──────────────────────┐
+                    ▼                                        ▼                      ▼
+                 SQLite                                受管 worktree             本地验证
+           plans / tasks / events                  detached Git checkout    固定 argv，无 shell
+           stage_runs / artifacts                   有界 diff + 测试收据       进程组监管回收
 ```
 
-- **`relay-daemon`**：唯一业务写入和调度者。
-- **`relay-store`**：SQLite schema v9、幂等、CAS 状态、启动栅栏和阶段。
-- **`relay-git`**：写入范围、worktree、diff、收据和原子制品。
-- **`relay-protocol`**：有界本机 JSON-RPC 帧和 DTO。
-- **`relay-sys`**：少量 macOS 进程/socket/文件系统原语。
-- **`ui/RelayTaskWindow`**：SwiftUI 任务窗口和菜单栏。
+| 模块 | 职责 |
+| --- | --- |
+| `relay-core` | 纯状态机：合法状态转换、崩溃恢复分类、重试资格判定 |
+| `relay-protocol` | 256 KiB 有界 JSON-RPC 2.0 帧解码、UTF-8 与重复键检查、DTO |
+| `relay-store` | SQLite schema v9（WAL）、幂等去重、CAS 状态推进、启动栅栏、`stage_runs` |
+| `relay-git` | 写入路径白名单、加固 `/usr/bin/git` 层、worktree、有界 diff、收据、原子制品 |
+| `relay-daemon` | 单写入者调度核心、进程组回收、Unix IPC、MCP stdio 桥、CLI |
+| `relay-sys` | 最小化 macOS/Unix 系统原语（`renamex_np`、`getpeereid`、`setpgid`/`killpg`、`statvfs`） |
+| `ui/RelayTaskWindow` | 原生 SwiftUI 任务窗口、差异/收据/交付查看器、验收确认弹窗、菜单栏面板 |
 
-详见[架构说明](docs/architecture.md)。
-
-## 环境要求
-
-- macOS 14 或更高，Apple Silicon。
-- 本机可用 Git。
-- 源码构建需要 Rust 工具链和 Xcode Command Line Tools。
-- 真实路线额外需要用户安装的 Claude Code、OpenCode，以及用户核对过的原生套餐。
-  Relay 不下载、不安装、不捆绑厂商 CLI。
-- 应用和 daemon 以当前用户运行，不需要 root 或系统守护进程。
+详见 [架构与安全边界](docs/architecture.md)。
 
 ## 从源码构建
 
+### 环境要求
+
+- macOS 14 或更高版本，Apple Silicon
+- Git、CI 固定版本的 Rust 工具链、Xcode Command Line Tools
+- 使用真实路线时，需用户自行安装 Claude Code 和 OpenCode CLI（Relay 不下载也不捆绑厂商 CLI）
+
 ```sh
-git clone git@github.com:astralwaveorg/AgentRelayNext.git
+git clone https://github.com/astralwaveorg/AgentRelayNext.git
 cd AgentRelayNext
 ./scripts/check full
 packaging/package.sh "$PWD/dist"
 ```
 
-`package.sh` 生成未签名的本机预览 ZIP，不是正式签名产物。生成 DMG：
+## 当前状态与演进路线
 
-```sh
-packaging/release/build-dmg.sh \
-  "$PWD/dist/RelayTaskWindow.app" \
-  "$PWD/dist/RelayTaskWindow-0.1.24.dmg"
-```
+Agent Relay `0.1.x` 是开源开发预览版。本机安全边界与审计底座已经就位，当前真实路线固定为一套双账户预览组合（`Claude Code + MiniMax` 实现，`OpenCode Go + DeepSeek` 只读评审，单轮结构化编辑，人工验收）。
 
-## 数据、隐私和计费
+`0.2` 到 `0.4` 的主要计划：
 
-- 默认数据目录：`~/.agent-relay-next/`；运行期目录 `0700`，文件 `0600`。
-- 每个实例一个本机 Unix socket，只接受同 UID 对端；不开放 HTTP/TCP/LAN。
-- 供应商密钥只通过私有 stdin 交给一次性 worker；不进入 argv、环境变量、日志或持久配置。
-- 评审只接收目标、补丁、验证状态/规则和摘要；不发送完整工作区、终端输出或用户目录。
-- MiniMax 扣费归属记为 `unverified`；OpenCode Go 要求供应商报告的套餐来源和零余额扣费。
-  Relay 不推断账户权益。
-- 不自动切换账户、模型或路线；额度/权限不确定时停止。
+- 开放 BYOK 与多 CLI 适配（`v0.2`）。解耦供应商特化逻辑，支持标准 OpenAI/Anthropic 兼容 API、本地 Ollama，以及 Claude Code、Codex、OpenCode、Kimi Code、WorkBuddy 任意独立配对。
+- 多轮 Worktree 编码与自动返工（`v0.3`）。允许实现 Agent 在隔离 worktree 内读仓、多轮修改并自跑测试，同时保留外层确定性验证与跨模型只读评审，开放自动返工循环。
+- 一键落地交付与成本账本（`v0.4`）。支持将验收补丁应用到新本地分支、导出 Markdown PR 证据卡片，并统计多模型路由的成本节省。
 
-参见[安全策略](SECURITY.md)和[路线核验](docs/route-pilot.md)。
+完整分析和阶段计划见 [后续开发方案](docs/roadmap.md)。
 
-## 状态与范围
+## 文档导航
 
-这是**开源开发预览**，不是签名生产版。因为没有 Apple 开发者身份，DMG 未签名、未公证。
-已知门禁见[发布说明](docs/release-notes-0.1.24.md)和[开源准备清单](docs/open-source-readiness.md)。
+| 文档 | 内容 |
+| --- | --- |
+| [快速上手与运维指南](docs/getting-started.md) | 安装、一键启用与停用、离线演示、升级回滚、磁盘清理、日志与诊断 |
+| [真实路线与项目登记](docs/real-routes.md) | 登记本机 Git 仓库、真实路线预览与启动、模型目录、重试与备用模型、计费与隐私 |
+| [架构与安全边界](docs/architecture.md) | 模块职责、状态机、评审链与本机安全不变量 |
+| [构建与发布流程](docs/release.md) | 未签名 DMG 打包、SBOM、资产校验、原生 smoke 与 GitHub Release 流程 |
+| [后续开发方案](docs/roadmap.md) | 市场分析、现状诊断与 `v0.1.28` 到 `v1.0` 开发规划 |
+| [真实运行脱敏证据](docs/evidence/README.md) | 真实双账户合成验收的脱敏证据包与生成规则 |
 
-已实现：离线演示、固定真实路线预览/启动、StageRun 持久化、受管 worktree、验证收据、
-独立评审、人工验收、队列/配额/清理、模型目录、双语 UI 和未签名 DMG 构建。
-
-仍有限：真实账户端到端证据、干净用户/第二 UID/断电验收、完整 VoiceOver/可访问性证据、
-全市场模型目录，以及持续运行期间的定期日志轮转。
-
-## 文档
-
-- [架构说明](docs/architecture.md)
-- [本机试用与运维](docs/local-preview.md)
-- [项目登记与真实路线](docs/project-registration.md)
-- [路线资格核验](docs/route-pilot.md)
-- [模型目录](docs/model-catalog.md)
-- [生产包准备](docs/production-package.md)
-- [GitHub 未签名 DMG 发布](docs/github-release.md)
-- [0.1.24 发布说明](docs/release-notes-0.1.24.md)
-- [开源准备清单](docs/open-source-readiness.md)
-
-## 开发
-
-```sh
-./scripts/check test relay-git
-./scripts/check test relay-daemon
-./scripts/check full
-```
-
-完整检查依次运行 `cargo fmt --all --check`、工作区 Clippy（警告视为错误）和工作区测试。
-UI 用 `packaging/build-app.sh` 编译。发布使用 `Cargo.lock`，不自动更新依赖。
-
-## 贡献
-
-阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题按 [SECURITY.md](SECURITY.md) 私下报告；
-不要在公开 Issue 中放利用细节、凭据或任务数据。
+其他文件：[CHANGELOG.md](CHANGELOG.md)、[CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、[SUPPORT.md](SUPPORT.md)。
 
 ## 许可证
 
-[MIT](LICENSE)。Copyright (c) 2026 Agent Relay contributors。
+[MIT](LICENSE) © 2026 Agent Relay contributors.

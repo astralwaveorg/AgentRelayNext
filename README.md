@@ -1,6 +1,6 @@
 # Agent Relay
 
-**One coding agent writes. Another reviews. You get the evidence.**
+One coding agent writes. Another reviews. You get the evidence.
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -8,28 +8,26 @@
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20Apple%20Silicon-111827.svg)](#requirements)
 [![Built with Rust + SwiftUI](https://img.shields.io/badge/built%20with-Rust%20%2B%20SwiftUI-f97316.svg)](#architecture)
 [![CI](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml/badge.svg)](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-0.1.24-2a7fff.svg)](docs/release-notes-0.1.24.md)
+[![Release](https://img.shields.io/badge/release-v0.1.27--preview-2a7fff.svg)](https://github.com/astralwaveorg/AgentRelayNext/releases/latest)
 
-<img src="docs/assets/hero.svg" alt="Agent Relay — local-first macOS handoff between two coding agents" width="100%">
+<img src="docs/assets/hero.svg" alt="Agent Relay local handoff between two coding agents on macOS" width="100%">
 
-Agent Relay is a **local-first macOS app for two AI coding agents**. One agent implements
-a change in an isolated Git worktree. A different tool and model review the exact patch
-read-only. Relay runs your approved local tests, binds the evidence together, and asks you
-to accept the result. Nothing is merged, pushed, or deployed automatically.
+Agent Relay is a local macOS task relay for two independent AI coding agents. It exposes an MCP stdio bridge, a CLI, and a native SwiftUI window.
 
-It is built for developers who already use two coding clients and are tired of copying
-context, patches, and test output between them by hand.
+A single task runs in four local steps:
 
-## Why Agent Relay
+1. A writer agent edits files inside a detached Git worktree. Your main checkout stays untouched.
+2. Relay runs your approved local test command with fixed arguments, no shell, and a cleared environment. It saves a hashed test receipt.
+3. A second tool with a different model reviews only the patch and the test receipt. It has read-only input and returns a digest-bound report.
+4. You open the SwiftUI window, CLI, or MCP client to inspect the patch, test receipt, and review findings. You accept or reject the result. Relay never merges, pushes, or deploys on its own.
 
-- **Two independent roles.** A writer implements; a different tool/model reviews. Same
-  model or same tool does not count as independent review.
-- **Evidence, not a chat transcript.** You get the patch, the local test receipt, and the
-  review report bound by SHA-256 to the same candidate.
-- **Your checkout stays yours.** Implementation happens in a managed worktree; the main
-  checkout's HEAD, index, and files are not modified.
-- **Local by default.** The daemon, CLI, SwiftUI window, SQLite store, and MCP bridge all
-  run on your Mac. No hosted relay service.
+## Key properties
+
+- Independent review. The writer and reviewer must use different tools and different normalized models. Provider prefixes and aliases count as the same model.
+- Bound evidence. Relay hashes `diff.patch`, `test_receipt.json`, and `review.json` with SHA-256 and binds them to one candidate. Any change after review blocks delivery.
+- Untouched main checkout. All edits happen in a managed worktree. Your working tree, index, and `HEAD` do not change.
+- Local headless daemon. A Rust daemon (`relayctl`) serves a local Unix socket and an MCP stdio bridge (`relayctl mcp`). A native SwiftUI app shows tasks and menu bar status.
+- Fail-closed runtime. Relay uses persistent launch fences, dispatch gates, bounded process-group cleanup (`TERM` then `KILL`), hardened `/usr/bin/git` calls, `0700`/`0600` file permissions, and no network listener.
 
 <img src="docs/assets/window.svg" alt="Synthetic Agent Relay task window with stage timeline, review card, and patch" width="100%">
 
@@ -40,77 +38,68 @@ context, patches, and test output between them by hand.
 <img src="docs/assets/workflow.svg" alt="Implement, verify, review, and human acceptance workflow" width="100%">
 
 ```text
-Claude Code + MiniMax-M3.1-Flash  ── writes ──┐
-                                              ▼
-                              isolated Git worktree
-                                              │
-                              fixed local tests + receipt
-                                              │
-                                              ▼
-OpenCode Go + DeepSeek-V4.1-Flash  ── read-only review of patch + receipt
-                                              │
-                                              ▼
-                              patch + test receipt + review evidence
-                                              │
-                                              ▼
-                                   you accept or reject
+Host / Codex / Shell ── MCP stdio / CLI / SwiftUI ──> relay daemon (local Unix socket)
+                                                             │
+              ┌──────────────────────────────────────────────┘
+              ▼
+   1. Implement (isolated Git worktree, write-scope allowlist)
+              │
+              ▼
+   2. Verify    (fixed local command, no shell -> test_receipt.json + SHA-256)
+              │
+              ▼
+   3. Review    (independent model, read-only diff + receipt -> digest-bound verdict)
+              │
+              ▼
+   4. Accept    (you inspect evidence and accept / reject)
 ```
-
-The default first-release route is intentionally fixed:
-
-- implement with **Claude Code + MiniMax-M3.1-Flash**
-- verify with an approved local command (no shell, fixed argv)
-- review with **OpenCode Go + deepseek-v4.1-flash**, read-only
-- one task, one attempt, no automatic retry or fallback
-
-The offline demo uses two local fake adapters and needs no account or network.
 
 ## Quick start
 
-### 1. Download the DMG
+You can run the full offline loop in about three minutes without API keys.
 
-Download `RelayTaskWindow-0.1.24.dmg` from the [latest GitHub Release](https://github.com/astralwaveorg/AgentRelayNext/releases/latest) and verify it:
+### 1. Install the preview DMG
+
+Download `RelayTaskWindow-<version>.dmg` and `SHA256SUMS` from [GitHub Releases](https://github.com/astralwaveorg/AgentRelayNext/releases/latest). Verify the checksum, then drag `RelayTaskWindow.app` into `Applications`:
 
 ```sh
-shasum -a 256 RelayTaskWindow-0.1.24.dmg
+shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
-The expected SHA-256 is in the attached `.sha256` file or `SHA256SUMS`. The DMG is unsigned and not notarized:
-on first launch, Control-click the app and choose **Open**, or allow it in
-**System Settings → Privacy & Security**. Do not disable Gatekeeper globally.
+> **Unsigned developer preview.** This DMG has no Apple Developer ID signature or notarization. On first launch, Control-click `RelayTaskWindow.app` and choose **Open**, or allow it in **System Settings → Privacy & Security**. Do not disable Gatekeeper globally.
 
-### 2. Install
+### 2. Enable the local service
 
-Open the DMG, drag `RelayTaskWindow.app` to `Applications`, and launch it.
-
-### 3. Check the local service
+Open **RelayTaskWindow** and click **Enable local preview** (启用本地预览), or run these commands in a terminal:
 
 ```sh
 relayctl="$HOME/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayctl"
-"$relayctl" doctor --instance-dir "$HOME/.agent-relay-next/instance"
-"$relayctl" mcp-verify --socket "$HOME/.agent-relay-next/instance/relay.sock"
+"$relayctl" local-preview enable
+"$relayctl" local-preview status
 ```
 
-### 4. Try the offline demo
+`enable` creates `~/.agent-relay-next/`, installs the log-rotating wrapper, registers a per-user LaunchAgent, and runs `doctor` and `mcp-verify`. Run `local-preview disable` to stop and unregister the service while keeping your data.
 
-In the app, choose **Run offline demo**. It creates a synthetic task, runs implementation,
-local verification, independent review, one rework (demo fixture only), and manual
-acceptance. Live project routes run one attempt without automatic rework. The demo does
-not call a real model or read your project.
+### 3. Run the offline demo
 
-## Features
+Click **Run offline demo** in the task window. Relay runs a synthetic task through implementation, local verification, independent review, one automatic rework, and manual acceptance. It uses no accounts and makes no network calls.
 
-| Area | What you get |
-| --- | --- |
-| Orchestration | Task plan, submission, FIFO serial dispatch, final human acceptance; live routes run one attempt (no auto rework), the offline demo fixture shows one rework |
-| Isolation | Managed detached Git worktree from a fixed commit OID; protected main checkout |
-| Verification | Fixed executable/argv, no shell, cleared environment, bounded output and timeout |
-| Independent review | Different tool and normalized model; read-only review input; digest-bound report |
-| Evidence | Patch, test receipt, review report, usage events, stage timeline |
-| Recovery | Persistent launch fence, dispatch gate, process-group reaping, interrupted-state recovery |
-| Local control | Unix socket IPC, MCP stdio bridge, SwiftUI task window, menu bar panel |
-| Operations | 2 GiB managed quota, 20-task queue cap, preview-first prune, 5 MiB × 5 log rotation |
-| Model catalog | Versioned built-in entries and deterministic role recommendation |
+### 4. Connect an MCP client (optional)
+
+Add the local stdio bridge to any MCP host such as Codex or Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "agent-relay": {
+      "command": "/Users/<you>/Applications/RelayTaskWindow.app/Contents/Resources/relay/relayctl",
+      "args": ["mcp", "--socket", "/Users/<you>/.agent-relay-next/instance/relay.sock"]
+    }
+  }
+}
+```
+
+Read [Getting Started and Operations](docs/getting-started.md) for upgrades, rollbacks, cleanup, and diagnostics. Read [Real Routes and Project Registration](docs/real-routes.md) to run on a local Git repository with real models.
 
 ## Architecture
 
@@ -121,107 +110,65 @@ SwiftUI window ───────────── local Unix RPC ───�
                                                              ▼
                                                         relay daemon
                                                              │
-                     ┌───────────────────────────────────────┼──────────────────────┐
-                     ▼                                       ▼                      ▼
-                  SQLite                                 managed worktree       verification
-              plans/tasks/events                     detached Git checkout    fixed argv, no shell
-              stage_runs/artifacts                   diff + receipt           process group
+                    ┌────────────────────────────────────────┼──────────────────────┐
+                    ▼                                        ▼                      ▼
+                 SQLite                               managed worktree        verification
+           plans / tasks / events                  detached Git checkout    fixed argv, no shell
+           stage_runs / artifacts                  bounded diff + receipt   process-group guard
 ```
 
-- **`relay-daemon`** is the only business writer and dispatcher.
-- **`relay-store`** owns SQLite schema v9, idempotency, CAS state, launch fences, and stages.
-- **`relay-git`** owns write-scope rules, worktrees, diffs, receipts, and atomic artifacts.
-- **`relay-protocol`** defines the bounded local JSON-RPC framing and DTOs.
-- **`relay-sys`** contains the small set of macOS process/socket/filesystem primitives.
-- **`ui/RelayTaskWindow`** is the SwiftUI task window and menu bar UI.
+| Component | Responsibility |
+| --- | --- |
+| `relay-core` | Pure task state machine, recovery classification, retry eligibility |
+| `relay-protocol` | 256 KiB bounded JSON-RPC 2.0 framing, UTF-8 and duplicate-key checks, DTOs |
+| `relay-store` | SQLite schema v9 (WAL), idempotency, CAS transitions, launch fences, `stage_runs` |
+| `relay-git` | Write-scope rules, hardened `/usr/bin/git` layer, worktrees, diffs, receipts, atomic artifacts |
+| `relay-daemon` | Single-writer orchestrator, process-group cleanup, Unix IPC, MCP stdio bridge, CLI |
+| `relay-sys` | Minimal macOS and Unix primitives (`renamex_np`, `getpeereid`, `setpgid`/`killpg`, `statvfs`) |
+| `ui/RelayTaskWindow` | Native SwiftUI task window, diff/receipt/handoff viewer, acceptance dialog, menu bar panel |
 
-See [Architecture](docs/architecture.md) for the detailed boundaries.
-
-## Requirements
-
-- macOS 14 or newer, Apple Silicon.
-- Git available locally.
-- Rust toolchain and Xcode Command Line Tools for source builds.
-- For the real route: user-installed Claude Code and OpenCode, plus a native plan the user
-  has verified. Relay does not download, install, or bundle vendor CLIs.
-- The app and daemon run as the current user; no root or system daemon is required.
+See [Architecture and Security](docs/architecture.md) for boundaries and invariants.
 
 ## Build from source
 
+### Requirements
+
+- macOS 14 or newer on Apple Silicon
+- Git, the Rust toolchain pinned in CI, and Xcode Command Line Tools
+- Optional for live routes: user-installed Claude Code and OpenCode CLIs (Relay never downloads or bundles vendor CLIs)
+
 ```sh
-git clone git@github.com:astralwaveorg/AgentRelayNext.git
+git clone https://github.com/astralwaveorg/AgentRelayNext.git
 cd AgentRelayNext
 ./scripts/check full
 packaging/package.sh "$PWD/dist"
 ```
 
-`package.sh` creates an unsigned local preview ZIP. It is not a signed release artifact.
-For a local DMG:
+## Current status and roadmap
 
-```sh
-packaging/release/build-dmg.sh \
-  "$PWD/dist/RelayTaskWindow.app" \
-  "$PWD/dist/RelayTaskWindow-0.1.24.dmg"
-```
+Agent Relay `0.1.x` is an open-source developer preview. The local safety and audit core is in place, while the live route currently targets one fixed dual-account setup (`Claude Code + MiniMax` to write, `OpenCode Go + DeepSeek` to review, single-shot structured edits, manual acceptance).
 
-## Data, privacy, and billing
+Planned milestones for `0.2` through `0.4`:
 
-- Default data directory: `~/.agent-relay-next/`; runtime directories are `0700`, files `0600`.
-- One local Unix socket per instance; same-UID peers only. No HTTP/TCP/LAN listener.
-- Supplier credentials are accepted through private stdin for a one-use worker; they are not
-  written to argv, environment variables, logs, or persistent configuration.
-- Review input contains only the goal, patch, verification status/rules, and digests; not the
-  full workspace, terminal output, or user home.
-- MiniMax charge attribution is recorded as `unverified`. OpenCode Go requires the provider's
-  reported plan source and a zero balance charge. Relay does not infer account entitlements.
-- No automatic account/model/route switching. Quota or permission uncertainty stops the run.
+- Open BYOK and multi-CLI adapters (`v0.2`). Remove provider-specific coupling and support OpenAI/Anthropic-compatible APIs, local Ollama, and any independent pair of Claude Code, Codex, OpenCode, Kimi Code, and WorkBuddy.
+- Multi-turn worktree coding and automatic rework (`v0.3`). Allow writer agents to use file and test tools inside the isolated worktree with bounded rework loops, while keeping deterministic verification and read-only cross-review outside.
+- One-click delivery and cost ledger (`v0.4`). Apply accepted patches to a new local branch, export Markdown PR evidence cards, and track multi-model cost savings.
 
-See [Security](SECURITY.md) and [Route pilot](docs/route-pilot.md).
-
-## Status and scope
-
-This repository is an **open-source developer preview**, not a signed production release.
-The DMG is unsigned because the project has no Apple Developer ID/notarization identity.
-Known gates are tracked in [Release notes](docs/release-notes-0.1.24.md) and
-[Open-source readiness](docs/open-source-readiness.md).
-
-Implemented: offline demo, fixed real-route preview/serve, StageRun persistence, managed
-worktrees, verification receipts, independent review, human acceptance, queue/quota/prune
-operations, model catalog, bilingual UI, and unsigned DMG builds.
-
-Still limited: real-account end-to-end evidence, clean-user/second-UID/power-loss acceptance,
-full accessibility/VoiceOver evidence, a full model marketplace, and continuous periodic
-log rotation.
+Read the full engineering plan in [Roadmap](docs/roadmap.md).
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Local preview and operations](docs/local-preview.md)
-- [Project registration and real route](docs/project-registration.md)
-- [Route qualification](docs/route-pilot.md)
-- [Model catalog](docs/model-catalog.md)
-- [Production package](docs/production-package.md)
-- [GitHub unsigned DMG release](docs/github-release.md)
-- [Release notes 0.1.24](docs/release-notes-0.1.24.md)
-- [Open-source readiness](docs/open-source-readiness.md)
+| Guide | What it covers |
+| --- | --- |
+| [Getting Started and Operations](docs/getting-started.md) | Install, `local-preview enable/status/disable`, offline demo, upgrade, rollback, pruning, logs |
+| [Real Routes and Project Registration](docs/real-routes.md) | Register local Git repos, live route preview and launch, model catalog, retry and fallback, billing and privacy |
+| [Architecture and Security](docs/architecture.md) | Crate boundaries, state machine, review chain, local security invariants |
+| [Release and Verification](docs/release.md) | Unsigned DMG build, SBOM, `verify-assets.py`, native smoke, GitHub Release workflow |
+| [Roadmap](docs/roadmap.md) | Market analysis, current gaps, and `v0.1.28` to `v1.0` engineering plan |
+| [Evidence Bundles](docs/evidence/README.md) | Sanitized records of real dual-account synthetic acceptance runs |
 
-## Development
-
-```sh
-./scripts/check test relay-git
-./scripts/check test relay-daemon
-./scripts/check full
-```
-
-The full check runs `cargo fmt --all --check`, workspace Clippy with warnings denied, and
-the workspace test suite. The UI is compiled with `packaging/build-app.sh`. Use
-`Cargo.lock` and do not auto-update dependencies during a release.
-
-## Contributing
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md). Security issues should follow
-[SECURITY.md](SECURITY.md); do not open a public issue with exploit details or credentials.
+Also see [CHANGELOG.md](CHANGELOG.md), [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [SUPPORT.md](SUPPORT.md).
 
 ## License
 
-[MIT](LICENSE). Copyright (c) 2026 Agent Relay contributors.
+[MIT](LICENSE) © 2026 Agent Relay contributors.

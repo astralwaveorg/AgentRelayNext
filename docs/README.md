@@ -1,31 +1,22 @@
 # Documentation
 
-[English](../README.md) · [简体中文](../README.zh-CN.md)
+[English README](../README.md) · [简体中文 README](../README.zh-CN.md)
 
-## Start here
+## 使用与运维
 
-- [Architecture](architecture.md): processes, modules, state machine, review chain, and
-  security boundaries.
-- [Local preview and operations](local-preview.md): install, upgrade, rollback, data, quota,
-  cleanup, and log rotation.
-- [Project registration](project-registration.md): register a local Git checkout and launch
-  the fixed real route.
-- [Route qualification](route-pilot.md): Claude Code, OpenCode, MiniMax, and OpenCode Go checks.
+- [快速上手与运维指南](getting-started.md)：安装、`local-preview enable|status|disable`、离线演示、升级回滚、磁盘配额、清理与日志轮转。
+- [真实路线与项目登记](real-routes.md)：登记本地 Git 仓库、真实双账户路线预览与启动、模型目录、自动重试与备用模型、隐私与计费边界。
 
-## Build and release
+## 架构与发布
 
-- [Production package](production-package.md): signing, notarization, SBOM, and verification
-  expectations. The current project has no Apple Developer ID.
-- [GitHub unsigned DMG](github-release.md): build, verify, and publish a local DMG without an
-  Apple developer account.
-- [Release notes 0.1.24](release-notes-0.1.24.md): current download, changes, and limitations.
+- [架构与安全边界](architecture.md)：6 个 Rust crate 和 SwiftUI UI 的模块分工、状态机、评审链与安全不变量。
+- [构建与发布流程](release.md)：未签名 DMG 打包、SBOM、`verify-assets.py`、`smoke-native.sh` 与 GitHub Release 流程。
+- [真实运行脱敏证据](evidence/README.md)：真实双账户合成验收的脱敏 JSON 证据包与复现方法。
 
-## Product reference
+## 演进规划
 
-- [Model catalog](model-catalog.md): versioned entries and deterministic recommendations.
-- [Open-source readiness](open-source-readiness.md): release checklist and remaining assets.
-- [Changelog](../CHANGELOG.md)
-- [Contributing](../CONTRIBUTING.md)
-- [Security](../SECURITY.md)
-- [Support](../SUPPORT.md)
-- [License](../LICENSE)
+- [后续开发方案](roadmap.md)：市场定位分析、现状诊断与 `v0.1.28` 到 `v1.0` 分阶段方案。
+
+## 项目治理
+
+- [Changelog](../CHANGELOG.md) · [Contributing](../CONTRIBUTING.md) · [Security](../SECURITY.md) · [Support](../SUPPORT.md) · [License](../LICENSE)
