@@ -41,3 +41,5 @@ patterns.
 | --- | --- | --- |
 | `synthetic-dual-account-0.1.26-task_eec669777e8b.json` | 0.1.26 | completed; MiniMax CN implement + OpenCode Go review, Go balance charge 0 |
 | `synthetic-dual-account-0.1.27-task_1597b5dd2f69.json` | 0.1.27 | completed; same route after the retry/fallback work |
+| `synthetic-dual-account-0.1.28-task_e84af7960139.json` | 0.1.28 | completed; MiniMax CN implement + OpenCode Go review (`balance_charge_usd=0`, source `go`) |
+| `b4-real-negative-matrix-0.1.28.json` | 0.1.28 | 4/4 passed: auth failure (`UPSTREAM_AUTH`), idempotent replay, mid-flight cancel, restart recovery |

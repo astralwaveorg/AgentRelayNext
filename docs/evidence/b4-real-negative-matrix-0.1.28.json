@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "kind": "b4_real_negative_matrix",
+  "version": "0.1.28-candidate",
+  "created_at": "2026-11-26T11:05:43Z",
+  "positive_bundle": "synthetic-dual-account-0.1.28-task_e84af7960139.json",
+  "cases": {
+    "auth_failure": {
+      "passed": true,
+      "trigger": "invalid_minimax_key_with_valid_go_key",
+      "elapsed_seconds": 1.66,
+      "task_id": "task_278925368889",
+      "task_state": "failed",
+      "reason_code_present": true,
+      "reason_is_upstream_auth": true,
+      "attempt_count": 1,
+      "artifact_count": 0,
+      "pending_gates": 0,
+      "blocking_groups": 0,
+      "claim_count": 1,
+      "implement_usage_events": 0,
+      "review_usage_events": 0,
+      "event_kinds": [
+        "submitted",
+        "claim",
+        "prepare_launch",
+        "spawned",
+        "worker_failed"
+      ]
+    },
+    "idempotent_replay": {
+      "passed": true,
+      "same_task_id": true,
+      "task_id": "task_e84af7960139",
+      "task_state": "completed",
+      "reason_code_present": false,
+      "reason_is_upstream_auth": false,
+      "attempt_count": 1,
+      "artifact_count": 1,
+      "pending_gates": 0,
+      "blocking_groups": 0,
+      "claim_count": 1,
+      "implement_usage_events": 1,
+      "review_usage_events": 1,
+      "event_kinds": [
+        "submitted",
+        "claim",
+        "prepare_launch",
+        "spawned",
+        "route_implement_usage",
+        "verify_round",
+        "review_round",
+        "route_review_usage",
+        "review_passed",
+        "worker_succeeded",
+        "verification_passed",
+        "review_accepted"
+      ]
+    },
+    "midflight_cancel": {
+      "passed": true,
+      "cancelled_from_state": "launching",
+      "cancel_reply_state": "cancelling",
+      "task_id": "task_9e602bf5eedd",
+      "task_state": "cancelled",
+      "reason_code_present": false,
+      "reason_is_upstream_auth": false,
+      "attempt_count": 1,
+      "artifact_count": 0,
+      "pending_gates": 0,
+      "blocking_groups": 0,
+      "claim_count": 1,
+      "implement_usage_events": 0,
+      "review_usage_events": 0,
+      "event_kinds": [
+        "submitted",
+        "claim",
+        "prepare_launch",
+        "cancel_requested",
+        "all_owned_workers_stopped"
+      ]
+    },
+    "restart_recovery": {
+      "passed": true,
+      "stopped_in_state": "running",
+      "signal": "SIGTERM",
+      "restarted_state": "interrupted",
+      "task_id": "task_916ad38128cf",
+      "task_state": "interrupted",
+      "reason_code_present": false,
+      "reason_is_upstream_auth": false,
+      "attempt_count": 1,
+      "artifact_count": 0,
+      "pending_gates": 0,
+      "blocking_groups": 0,
+      "claim_count": 1,
+      "implement_usage_events": 0,
+      "review_usage_events": 0,
+      "event_kinds": [
+        "submitted",
+        "claim",
+        "prepare_launch",
+        "spawned",
+        "mark_interrupted"
+      ]
+    }
+  },
+  "redactions": [
+    "credentials and account identifiers",
+    "absolute user and binary paths",
+    "prompts, patches, and raw provider bodies"
+  ]
+}
