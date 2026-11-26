@@ -3,6 +3,36 @@
 所有用户可见变化记录在此。产品版本以 `crates/relay-daemon/Cargo.toml` 为准；里程碑
 （M1/M2/M2.5/M3）不是版本号。
 
+## 0.1.28 — 2026-11-26
+
+### Added
+
+- Configurable implement model (`RELAY_IMPLEMENT_MODEL`) and quota-triggered
+  implement fallback (`RELAY_IMPLEMENT_FALLBACK_MODEL`), wired through request
+  payloads, selection metadata, approval digests, and usage verification.
+- Kernel-backed process-group ownership checks (`relay-sys`) before sending
+  `SIGTERM` or `SIGKILL`, preventing signals to forged or recycled `pgid`s.
+- Pure Swift `MenuStatus` projection with automated `swiftc` regression tests
+  (`packaging/qa/ui-status-test.swift`) wired into `./scripts/check full`.
+- Sanitized `0.1.28` real dual-account positive and B4 negative-matrix evidence
+  bundles (`docs/evidence/`), covering auth failure, idempotent replay,
+  mid-flight cancel, and restart recovery.
+
+### Changed
+
+- Converged `dispatch_gate` release into `register_artifact_in_tx` and unified
+  verification failure exits so `review_active` and `implementation_only` follow
+  one terminal contract.
+- Hardened model identity normalization across catalog and independence checks,
+  broadened credential redaction in verification output, persisted bounded
+  `tasks.reason_code` (<=256 bytes), restricted `relay.sock`/`.own` to `0600`,
+  checked every required SQLite table and column on open, pruned review/staging
+  scratch directories, bounded per-review payloads in `ui.overview`, fixed
+  runtime log rotation with copy-and-truncate, and moved maintenance-marker
+  creation after service stop in upgrades.
+- Cleaned up legacy workspace/repository docs and added the `v0.2` to `v1.0`
+  development roadmap (`docs/roadmap.md`).
+
 ## 0.1.27 — 2026-11-25
 
 ### Added

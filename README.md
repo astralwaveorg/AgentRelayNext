@@ -8,7 +8,7 @@ One coding agent writes. Another reviews. You get the evidence.
 [![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B%20Apple%20Silicon-111827.svg)](#requirements)
 [![Built with Rust + SwiftUI](https://img.shields.io/badge/built%20with-Rust%20%2B%20SwiftUI-f97316.svg)](#architecture)
 [![CI](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml/badge.svg)](https://github.com/astralwaveorg/AgentRelayNext/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.27--preview-2a7fff.svg)](https://github.com/astralwaveorg/AgentRelayNext/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.1.28--preview-2a7fff.svg)](https://github.com/astralwaveorg/AgentRelayNext/releases/latest)
 
 <img src="docs/assets/hero.svg" alt="Agent Relay local handoff between two coding agents on macOS" width="100%">
 
