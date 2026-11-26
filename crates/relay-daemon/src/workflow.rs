@@ -20,7 +20,8 @@ use serde_json::{json, Value};
 
 use crate::service::{
     classify_events, now_rfc3339, spawn_event_reader, AdapterProbeReport, AdapterRunEvents,
-    M1Service, ReclaimOutcome, TEMPLATE_IMPLEMENTATION_ONLY, TEMPLATE_IMPLEMENT_REVIEW,
+    GroupIdentity, M1Service, OwnedGuard, ReclaimOutcome, TEMPLATE_IMPLEMENTATION_ONLY,
+    TEMPLATE_IMPLEMENT_REVIEW,
 };
 use relay_core::{Event, State};
 use relay_git::{
@@ -622,6 +623,7 @@ impl M1Service {
         stop: &AtomicBool,
     ) -> Result<TrackedRun, TrackedFailure> {
         use std::os::unix::process::CommandExt;
+        let before_spawn = relay_sys::current_epoch_token();
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -629,10 +631,23 @@ impl M1Service {
             .spawn()
             .map_err(|e| TrackedFailure::SpawnFailed(format!("无法启动受管子进程：{e}")))?;
         let pgid = child.id() as i32;
+        let leader_start = M1Service::leader_start_with_fallback(pgid, &before_spawn);
+        let group_id = GroupIdentity::live(pgid, leader_start.clone());
+        let after_exit_id = GroupIdentity::after_leader_exit(pgid, leader_start);
+        let _gate_guard = {
+            self.gate_groups
+                .lock()
+                .expect("gate_groups 锁中毒")
+                .insert((task_id.to_owned(), attempt_no), group_id.clone());
+            OwnedGuard {
+                owned: Arc::clone(&self.gate_groups),
+                key: (task_id.to_owned(), attempt_no),
+            }
+        };
         let now = || now_rfc3339();
         // 归属证据：登记失败即失去可核实的进程号身份——保守回收。
         if let Err(e) = self.store.set_gate_pgid(task_id, attempt_no, pgid, &now()) {
-            let confirmed = self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+            let confirmed = self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed;
             self.reap_child(&mut child);
             return Err(if confirmed {
@@ -659,8 +674,9 @@ impl M1Service {
         };
         let deadline = Instant::now() + Duration::from_millis(self.config.worker_timeout_ms);
         // 回收并结算：确认整组退出才清除标记上的进程号。
-        let reclaim_settled = |child: &mut std::process::Child| -> bool {
-            let confirmed = self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+        let reclaim_settled = |child: &mut std::process::Child, exited: bool| -> bool {
+            let identity = if exited { &after_exit_id } else { &group_id };
+            let confirmed = self.reclaim_group(identity, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed;
             self.reap_child(child);
             if confirmed {
@@ -672,7 +688,7 @@ impl M1Service {
         let mut running = true;
         while running {
             if stop.load(Ordering::SeqCst) {
-                let confirmed = reclaim_settled(&mut child);
+                let confirmed = reclaim_settled(&mut child, false);
                 if !confirmed {
                     return Err(TrackedFailure::Unconfirmed(
                         "daemon 停止回收未确认退出".into(),
@@ -690,7 +706,7 @@ impl M1Service {
             if let Ok(Some(t)) = self.store.get_task(task_id) {
                 if t.state != State::Running {
                     // 取消（或已被取消/中断）：后继活动立即停止。
-                    let confirmed = reclaim_settled(&mut child);
+                    let confirmed = reclaim_settled(&mut child, false);
                     if !confirmed {
                         return Err(TrackedFailure::Unconfirmed(
                             "取消回收未确认退出，保持阻断".into(),
@@ -713,7 +729,7 @@ impl M1Service {
                 }
                 Ok(None) => {
                     if Instant::now() >= deadline {
-                        if !reclaim_settled(&mut child) {
+                        if !reclaim_settled(&mut child, false) {
                             return Err(TrackedFailure::Unconfirmed(
                                 "等待上限已到，整组退出未确认".into(),
                             ));
@@ -723,7 +739,7 @@ impl M1Service {
                     std::thread::sleep(Duration::from_millis(30));
                 }
                 Err(e) => {
-                    let confirmed = reclaim_settled(&mut child);
+                    let confirmed = reclaim_settled(&mut child, false);
                     return Err(if confirmed {
                         TrackedFailure::Protocol(format!("等待子进程失败：{e}"))
                     } else {
@@ -733,7 +749,7 @@ impl M1Service {
             }
         }
         // 组长退出 ≠ 整组退出：确认后清除进程号。
-        if !reclaim_settled(&mut child) {
+        if !reclaim_settled(&mut child, true) {
             return Err(TrackedFailure::Unconfirmed(
                 "组长退出但整组退出未确认（成员残留）".into(),
             ));
@@ -886,12 +902,7 @@ impl M1Service {
         use relay_git::{receipt::run_and_build_receipt_with, verify::run_rule_supervised};
         use relay_git::{ReceiptError, VerifyError};
         use relay_store::{StageFinish, StageKey, StageKind};
-        let supervisor = VerifyProcess {
-            service: self,
-            task_id,
-            attempt_no,
-            stop,
-        };
+        let supervisor = VerifyProcess::new(self, task_id, attempt_no, stop);
         let key = |round, kind| StageKey {
             task_id,
             attempt_no,

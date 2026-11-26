@@ -2194,3 +2194,119 @@ fn spawn_failure_commits_failure_and_release_together_then_b_starts_once() {
     );
     fs::remove_dir_all(&env.dir).ok();
 }
+
+/// A11：发 TERM/KILL 前复核 pgid 归属（leader_pid + leader_start）；
+/// 伪造或已复用的 pgid 绝不发信号、不误杀无关进程，任务保持 cancelling、
+/// 派发门保持 pending 阻断。
+#[test]
+fn forged_or_recycled_pgid_sends_no_signal_and_keeps_cancelling() {
+    use relay_daemon::service::{GroupIdentity, RealGroupControl};
+    use std::os::unix::process::CommandExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingRealControl {
+        term_calls: AtomicUsize,
+        kill_calls: AtomicUsize,
+    }
+    impl GroupControl for CountingRealControl {
+        fn term(&self, pgid: i32) -> std::io::Result<()> {
+            self.term_calls.fetch_add(1, Ordering::SeqCst);
+            RealGroupControl.term(pgid)
+        }
+        fn kill(&self, pgid: i32) -> std::io::Result<()> {
+            self.kill_calls.fetch_add(1, Ordering::SeqCst);
+            RealGroupControl.kill(pgid)
+        }
+        fn probe(&self, pgid: i32) -> std::io::Result<bool> {
+            RealGroupControl.probe(pgid)
+        }
+        fn verify_ownership(
+            &self,
+            identity: &GroupIdentity,
+        ) -> std::io::Result<relay_sys::GroupOwnership> {
+            RealGroupControl.verify_ownership(identity)
+        }
+    }
+
+    let env = setup("a11-forged-pgid", None);
+    let store = Arc::new(Store::open(&env.dir.join("instance/relay.sqlite3")).unwrap());
+    let control = Arc::new(CountingRealControl {
+        term_calls: AtomicUsize::new(0),
+        kill_calls: AtomicUsize::new(0),
+    });
+    let service = M1Service::with_group_control(store.clone(), env.config.clone(), control.clone());
+
+    // 启动一个与任务无关的进程组，模拟原 pgid 已被操作系统复用。
+    let mut bystander = Command::new("/bin/sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let bystander_pgid = bystander.id() as i32;
+
+    let task_id = submit_simple_id(&env, &service, "a1100000-0000-4000-8000-000000000001");
+    let claimed = store.claim_next("2026-11-26T00:00:01Z").unwrap().unwrap();
+    assert_eq!(claimed.task_id, task_id);
+    store
+        .launch_fence(relay_store::LaunchFenceInput {
+            task_id: &task_id,
+            expected_active_attempt: 1,
+            expected_revision: claimed.revision,
+            launch_code: "launch-a11-forged",
+            worktree_id: "wt-a11-forged",
+            now: "2026-11-26T00:00:02Z",
+        })
+        .unwrap();
+    // 写入与 bystander_pgid 相同的 pgid，但 leader_start 是伪造/过期的旧启动时间。
+    store
+        .insert_managed_group(relay_store::ManagedGroupInput {
+            task_id: &task_id,
+            attempt_no: 1,
+            pgid: bystander_pgid,
+            leader_pid: bystander_pgid,
+            leader_start: "1000000000.000001",
+            now: "2026-11-26T00:00:03Z",
+        })
+        .unwrap();
+    let running = store
+        .confirm_spawn_running(&task_id, 1, claimed.revision + 1, "2026-11-26T00:00:04Z")
+        .unwrap();
+
+    let cancel_reply = service
+        .dispatch(
+            "relay_cancel",
+            Some(&serde_json::json!({
+                "task_id": task_id,
+                "expected_revision": running.revision,
+                "request_id": "a1100000-0000-4000-8000-000000000002",
+            })),
+        )
+        .unwrap();
+    assert_eq!(
+        cancel_reply["task"]["state"], "cancelling",
+        "归属不可确认时不得推进到 cancelled: {cancel_reply}"
+    );
+    assert_eq!(
+        control.term_calls.load(Ordering::SeqCst),
+        0,
+        "伪造/复用 pgid 绝不得发 SIGTERM"
+    );
+    assert_eq!(
+        control.kill_calls.load(Ordering::SeqCst),
+        0,
+        "伪造/复用 pgid 绝不得发 SIGKILL"
+    );
+    assert!(
+        bystander.try_wait().unwrap().is_none(),
+        "无关进程组必须保持存活，未被误杀"
+    );
+    assert!(
+        !store.list_pending_gates().unwrap().is_empty(),
+        "派发门必须保持 pending 阻断"
+    );
+
+    // 清理无关测试进程。
+    let _ = relay_sys::killpg_kill(bystander_pgid);
+    let _ = bystander.wait();
+    fs::remove_dir_all(&env.dir).ok();
+}

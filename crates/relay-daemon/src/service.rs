@@ -804,11 +804,40 @@ pub struct AdapterRunEvents {
     pub(crate) provider_evidence: Option<Value>,
 }
 
+/// 受管进程组归属身份（A11：发 TERM/KILL 前必须核对 `leader_pid` 与 `leader_start`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupIdentity {
+    pub pgid: i32,
+    pub leader_pid: i32,
+    pub leader_start: String,
+    pub leader_just_exited: bool,
+}
+
+impl GroupIdentity {
+    pub fn live(pgid: i32, leader_start: impl Into<String>) -> Self {
+        Self {
+            pgid,
+            leader_pid: pgid,
+            leader_start: leader_start.into(),
+            leader_just_exited: false,
+        }
+    }
+
+    pub fn after_leader_exit(pgid: i32, leader_start: impl Into<String>) -> Self {
+        Self {
+            pgid,
+            leader_pid: pgid,
+            leader_start: leader_start.into(),
+            leader_just_exited: true,
+        }
+    }
+}
+
 /// 受管进程组跟踪守卫：pgid 登记后直到 attempt 结束才移除——直接子
 /// 进程先退出而组内仍有成员时，取消仍能按 pgid 回收整组（不丢失跟踪）。
-struct OwnedGuard {
-    owned: Arc<Mutex<HashMap<(String, u32), i32>>>,
-    key: (String, u32),
+pub(crate) struct OwnedGuard {
+    pub(crate) owned: Arc<Mutex<HashMap<(String, u32), GroupIdentity>>>,
+    pub(crate) key: (String, u32),
 }
 
 impl Drop for OwnedGuard {
@@ -821,9 +850,11 @@ impl Drop for OwnedGuard {
 pub struct M1Service {
     pub store: Arc<Store>,
     pub config: ServiceConfig,
-    /// 受管子进程组（pgid）：取消只处理确认归属的进程组；Arc 供
-    /// OwnedGuard 持有（pgid 跟踪到 attempt 结束）。
-    pub(crate) owned: Arc<Mutex<HashMap<(String, u32), i32>>>,
+    /// 受管子进程组（pgid + 组长归属信息）：取消只处理确认归属的进程组；
+    /// Arc 供 OwnedGuard 持有（跟踪到 attempt 结束）。
+    pub(crate) owned: Arc<Mutex<HashMap<(String, u32), GroupIdentity>>>,
+    /// 挂在待确认派发门上的辅助子进程组（probe/verify/review/rework）的归属信息。
+    pub(crate) gate_groups: Arc<Mutex<HashMap<(String, u32), GroupIdentity>>>,
     /// 进程控制边界（生产 relay-sys；测试注入替身）。
     pub(crate) group_control: Arc<dyn GroupControl>,
     maintenance: Option<PathBuf>,
@@ -885,6 +916,7 @@ impl M1Service {
         maintenance: Option<PathBuf>,
     ) -> Arc<M1Service> {
         let owned = Arc::new(Mutex::new(HashMap::new()));
+        let gate_groups = Arc::new(Mutex::new(HashMap::new()));
         let archive = maintenance
             .as_ref()
             .and_then(|path| path.parent())
@@ -896,6 +928,7 @@ impl M1Service {
             store,
             config,
             owned,
+            gate_groups,
             group_control,
             maintenance,
             archive,
@@ -1822,7 +1855,7 @@ impl M1Service {
         task_id: &str,
         attempt_no: u32,
         expected_revision: u64,
-        pgid: i32,
+        identity: &GroupIdentity,
         reason_unconfirmed: &str,
         release_gate: bool,
     ) -> bool {
@@ -1830,8 +1863,8 @@ impl M1Service {
         // A leader exit is not a group exit. If the group still has members,
         // reclaim it (TERM -> SIGKILL with bounded budgets) instead of leaving
         // descendants alive behind a permanent dispatch block.
-        let confirmed = self.confirm_group_exit(pgid, budget)
-            || self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+        let confirmed = self.confirm_group_exit(identity.pgid, budget)
+            || self.reclaim_group(identity, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed;
         if confirmed {
             let _ = self
@@ -2462,6 +2495,7 @@ impl M1Service {
                 return;
             }
         }
+        let before_spawn = relay_sys::current_epoch_token();
         let child = match spawn_cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -2523,6 +2557,9 @@ impl M1Service {
             None
         };
         let pgid = child.id() as i32;
+        let leader_start = Self::leader_start_with_fallback(pgid, &before_spawn);
+        let group_id = GroupIdentity::live(pgid, leader_start.clone());
+        let after_exit_id = GroupIdentity::after_leader_exit(pgid, leader_start.clone());
         let mut child = child;
         // 退出码在等待循环内赋值；panic/取消路径不读它。
         let exit_ok: bool;
@@ -2534,7 +2571,7 @@ impl M1Service {
         self.owned
             .lock()
             .expect("owned 锁中毒")
-            .insert((task_id.to_owned(), attempt_no), pgid);
+            .insert((task_id.to_owned(), attempt_no), group_id.clone());
         // 0) 同步点：已 spawn、尚未登记组（用于三窗口覆盖）。
         if self.stall("after_spawn_before_register", task_id, stop) {
             return;
@@ -2549,7 +2586,7 @@ impl M1Service {
                 attempt_no,
                 pgid,
                 leader_pid: pgid,
-                leader_start: &Self::leader_start(pgid),
+                leader_start: &leader_start,
                 now: &now(),
             })
             .is_ok();
@@ -2559,7 +2596,7 @@ impl M1Service {
             eprintln!(
                 "relay daemon: attempt {task_id}#{attempt_no} 受管组登记失败（缺进程记录），转 interrupted"
             );
-            let confirmed = self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+            let confirmed = self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed;
             self.reap_child(&mut child);
             if confirmed {
@@ -2596,7 +2633,7 @@ impl M1Service {
         {
             // 写回失败：有界回收；Confirmed（可信退出证据）→ 解封 +
             // SpawnFailed；Unconfirmed → gate 保持 pending + interrupted。
-            let confirmed = self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+            let confirmed = self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed;
             self.reap_child(&mut child);
             let event = if confirmed {
@@ -2642,8 +2679,9 @@ impl M1Service {
             if stop.load(Ordering::SeqCst) {
                 // daemon 停止：有界回收受管进程组，不做状态推进（恢复
                 // 分类处理；未证实退出由恢复归入 interrupted，重试阻断）。
-                let confirmed = self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
-                    == ReclaimOutcome::Confirmed;
+                let confirmed =
+                    self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
+                        == ReclaimOutcome::Confirmed;
                 self.reap_child(&mut child);
                 if confirmed {
                     let _ = self
@@ -2678,7 +2716,7 @@ impl M1Service {
             if let Ok(Some(t)) = self.store.get_task(task_id) {
                 if t.state == State::Cancelling {
                     let confirmed =
-                        self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+                        self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
                             == ReclaimOutcome::Confirmed;
                     self.reap_child(&mut child);
                     if confirmed {
@@ -2725,7 +2763,7 @@ impl M1Service {
                         // 不会发生；组回收未证实也照常分类 failed，但保留
                         // 日志线索）。
                         let confirmed =
-                            self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+                            self.reclaim_group(&group_id, self.term_budget(), self.kill_budget())
                                 == ReclaimOutcome::Confirmed;
                         if confirmed {
                             self.reap_child(&mut child);
@@ -2801,7 +2839,7 @@ impl M1Service {
             task_id,
             attempt_no,
             task.revision + 2,
-            pgid,
+            &after_exit_id,
             "组长退出但整组退出未确认：持久阻断",
             false,
         ) {
@@ -2848,7 +2886,7 @@ impl M1Service {
                         task_id,
                         attempt_no,
                         task.revision + 2,
-                        pgid,
+                        &after_exit_id,
                         "适配器 stdout 未在上限内读完，整组退出未确认：持久阻断",
                         false,
                     ) {
@@ -3138,12 +3176,7 @@ impl M1Service {
         use crate::verify_process::VerifyProcess;
         use relay_git::{receipt::run_and_build_receipt_with, verify::run_rule_supervised};
         use relay_git::{ReceiptError, VerifyError};
-        let supervisor = VerifyProcess {
-            service: self,
-            task_id,
-            attempt_no,
-            stop,
-        };
+        let supervisor = VerifyProcess::new(self, task_id, attempt_no, stop);
         let collected = match collect_diff(worktree, &plan.base_oid, scope) {
             Ok(c) => c,
             Err(e) => {
@@ -3286,12 +3319,37 @@ impl M1Service {
         //（pgid 的移除由 OwnedGuard 在 attempt 结束时统一处理）+ 待确认
         // 标记上的子进程组（探测/评审/返工）。两组都确认退出才兑现
         // cancelled；任一未确认即保持 cancelling 并持久阻断。
-        let owned = self
+        let owned_mem = self
             .owned
             .lock()
             .expect("owned 锁中毒")
             .get(&(task_id.to_owned(), attempt_no))
-            .copied();
+            .cloned();
+        let persisted_group = self
+            .store
+            .list_managed_groups(None)
+            .ok()
+            .and_then(|rows| {
+                rows.into_iter().find(|r| {
+                    r.task_id == task_id
+                        && r.attempt_no == attempt_no
+                        && matches!(r.state.as_str(), "tracking" | "blocking")
+                })
+            })
+            .map(|r| GroupIdentity {
+                pgid: r.pgid,
+                leader_pid: r.leader_pid,
+                leader_start: r.leader_start,
+                leader_just_exited: false,
+            });
+        // 优先使用持久化的组长归属信息（A11：防止内存与落库记录漂移，且无内存记录时
+        // 仍能对已落库的 tracking/blocking 组执行归属复核）。
+        let owned = match (owned_mem, persisted_group) {
+            (Some(mem), Some(db)) if db.pgid == mem.pgid => Some(db),
+            (Some(mem), _) => Some(mem),
+            (None, Some(db)) => Some(db),
+            (None, None) => None,
+        };
         let gates = match self.store.list_pending_gates() {
             Ok(gates) => gates,
             Err(_) => return,
@@ -3306,11 +3364,22 @@ impl M1Service {
             return;
         }
         let gate_pgid = gate.map_or(0, |gate| gate.pgid);
+        let gate_identity = if gate_pgid > 0 {
+            self.gate_groups
+                .lock()
+                .expect("gate_groups 锁中毒")
+                .get(&(task_id.to_owned(), attempt_no))
+                .filter(|id| id.pgid == gate_pgid)
+                .cloned()
+                .or_else(|| Some(GroupIdentity::live(gate_pgid, "")))
+        } else {
+            None
+        };
         let now = now_rfc3339();
         let mut all_confirmed = true;
-        // 统一有界回收：TERM → 期限；仍存活 → SIGKILL → 期限。
-        if let Some(pgid) = owned {
-            if self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
+        // 统一有界回收：发信号前复核归属，TERM → 期限；仍存活 → 复核归属 → SIGKILL → 期限。
+        if let Some(identity) = &owned {
+            if self.reclaim_group(identity, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed
             {
                 let _ = self.store.resolve_managed_group(task_id, attempt_no, &now);
@@ -3323,19 +3392,21 @@ impl M1Service {
                     &now,
                 );
                 eprintln!(
-                    "relay daemon: attempt {task_id}#{attempt_no} 的进程组 {pgid} 期限到仍未证实退出"
+                    "relay daemon: attempt {task_id}#{attempt_no} 的进程组 {} 期限到仍未证实退出",
+                    identity.pgid
                 );
             }
         }
-        if gate_pgid > 0 {
-            if self.reclaim_group(gate_pgid, self.term_budget(), self.kill_budget())
+        if let Some(identity) = &gate_identity {
+            if self.reclaim_group(identity, self.term_budget(), self.kill_budget())
                 == ReclaimOutcome::Confirmed
             {
                 let _ = self.store.set_gate_pgid(task_id, attempt_no, 0, &now);
             } else {
                 all_confirmed = false;
                 eprintln!(
-                    "relay daemon: attempt {task_id}#{attempt_no} 的子进程组 {gate_pgid} 期限到仍未证实退出"
+                    "relay daemon: attempt {task_id}#{attempt_no} 的子进程组 {} 期限到仍未证实退出",
+                    identity.pgid
                 );
             }
         }
@@ -3390,16 +3461,14 @@ impl M1Service {
             }
         }
     }
-    /// 组长进程启动时间（归属证据；ps 不可用记 unknown）。
-    fn leader_start(pid: i32) -> String {
-        std::process::Command::new("ps")
-            .args(["-o", "lstart=", "-p", &pid.to_string()])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-            .unwrap_or_else(|_| "unknown".to_owned())
+    /// 组长进程启动时间令牌（内核读取；极快退出已成僵尸时退回 spawn 前下界）。
+    pub(crate) fn leader_start_with_fallback(pid: i32, before_spawn: &str) -> String {
+        relay_sys::process_start_token(pid)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| before_spawn.to_owned())
     }
 
-    /// 适配器 probe：以 probe 模式运行夹具，解析身份与能力声明。
     /// 适配器 probe（05/16）：以 `probe` 模式运行目录项，解析身份、角色与
     /// 能力声明。`gate` 给出 (task_id, attempt_no) 时（派发路径）把 probe
     /// 的进程组记到该 attempt 的待确认标记上；None（预览路径）不登记。
@@ -3410,6 +3479,7 @@ impl M1Service {
         fixture: &Path,
         gate: Option<(&str, u32)>,
     ) -> Result<AdapterProbeReport, ProbeError> {
+        let before_spawn = relay_sys::current_epoch_token();
         let mut child = Command::new(fixture)
             .arg("probe")
             .stdout(std::process::Stdio::piped())
@@ -3418,27 +3488,47 @@ impl M1Service {
             .spawn()
             .map_err(|e| ProbeError::exited(format!("无法启动 probe：{e}")))?;
         let pgid = child.id() as i32;
+        let leader_start = Self::leader_start_with_fallback(pgid, &before_spawn);
+        let probe_identity = GroupIdentity::live(pgid, leader_start.clone());
+        let probe_after_exit = GroupIdentity::after_leader_exit(pgid, leader_start);
+        let _gate_guard = gate.map(|(task_id, attempt_no)| {
+            self.gate_groups
+                .lock()
+                .expect("gate_groups 锁中毒")
+                .insert((task_id.to_owned(), attempt_no), probe_identity.clone());
+            OwnedGuard {
+                owned: Arc::clone(&self.gate_groups),
+                key: (task_id.to_owned(), attempt_no),
+            }
+        });
         let deadline =
             std::time::Instant::now() + Duration::from_millis(self.config.adapter_probe_timeout_ms);
-        let reclaim_and_settle = |child: &mut Child, reason: &str| -> Option<ProbeError> {
-            // 整组退出确认（统一监管：组长退出 ≠ 整组退出）；未确认 → 有界
-            // 回收后再探测，仍不确认则如实报告（派发路径 gate 保持 pending）。
-            let confirmed = self.confirm_group_exit(
-                pgid,
-                Duration::from_millis(self.config.group_exit_budget_ms),
-            ) || self.reclaim_group(pgid, self.term_budget(), self.kill_budget())
-                == ReclaimOutcome::Confirmed;
-            self.reap_child(child);
-            if !confirmed {
-                return Some(ProbeError::unconfirmed(reason, pgid));
-            }
-            if let Some((task_id, attempt_no)) = gate {
-                let _ = self
-                    .store
-                    .set_gate_pgid(task_id, attempt_no, 0, &now_rfc3339());
-            }
-            None
-        };
+        let reclaim_and_settle =
+            |child: &mut Child, reason: &str, exited: bool| -> Option<ProbeError> {
+                // 整组退出确认（统一监管：组长退出 ≠ 整组退出）；未确认 → 有界
+                // 回收后再探测，仍不确认则如实报告（派发路径 gate 保持 pending）。
+                let identity = if exited {
+                    &probe_after_exit
+                } else {
+                    &probe_identity
+                };
+                let confirmed =
+                    self.confirm_group_exit(
+                        pgid,
+                        Duration::from_millis(self.config.group_exit_budget_ms),
+                    ) || self.reclaim_group(identity, self.term_budget(), self.kill_budget())
+                        == ReclaimOutcome::Confirmed;
+                self.reap_child(child);
+                if !confirmed {
+                    return Some(ProbeError::unconfirmed(reason, pgid));
+                }
+                if let Some((task_id, attempt_no)) = gate {
+                    let _ = self
+                        .store
+                        .set_gate_pgid(task_id, attempt_no, 0, &now_rfc3339());
+                }
+                None
+            };
         // 派发路径：持久归属证据（重启后据此探测确认退出）。登记失败即
         // 失去可核实的进程号身份——保守回收。
         if let Some((task_id, attempt_no)) = gate {
@@ -3446,8 +3536,11 @@ impl M1Service {
                 .store
                 .set_gate_pgid(task_id, attempt_no, pgid, &now_rfc3339())
             {
-                let err = reclaim_and_settle(&mut child, &format!("probe 进程组登记失败：{e}"))
-                    .unwrap_or_else(|| ProbeError::exited(format!("probe 进程组登记失败：{e}")));
+                let err =
+                    reclaim_and_settle(&mut child, &format!("probe 进程组登记失败：{e}"), false)
+                        .unwrap_or_else(|| {
+                            ProbeError::exited(format!("probe 进程组登记失败：{e}"))
+                        });
                 return Err(err);
             }
         }
@@ -3469,14 +3562,16 @@ impl M1Service {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 Err(e) => {
-                    let err = reclaim_and_settle(&mut child, &format!("probe 等待失败：{e}"))
-                        .unwrap_or_else(|| ProbeError::exited(format!("probe 等待失败：{e}")));
+                    let err =
+                        reclaim_and_settle(&mut child, &format!("probe 等待失败：{e}"), false)
+                            .unwrap_or_else(|| ProbeError::exited(format!("probe 等待失败：{e}")));
                     return Err(err);
                 }
             }
         }
         let timed_out = exited.is_none();
-        if let Some(err) = reclaim_and_settle(&mut child, "probe 整组退出未确认（成员残留）")
+        if let Some(err) =
+            reclaim_and_settle(&mut child, "probe 整组退出未确认（成员残留）", !timed_out)
         {
             return Err(err);
         }
@@ -3581,23 +3676,37 @@ impl M1Service {
         }
     }
 
-    /// 有界进程组回收（03：只有确认整个组退出才可标 cancelled）。
-    /// TERM → `term_budget`；仍存活 → SIGKILL → `kill_budget`。任一阶段
-    /// 探测到组消失即 Confirmed；预算用尽仍未证实退出 → Unconfirmed
-    /// （未知结果保留阻塞，不丢失跟踪、不派新 attempt）。
+    /// 有界进程组回收（03/A11：发 TERM/KILL 前必须复核 pgid 归属，只有确认
+    /// 整个组退出才可标 cancelled）。归属不可确认时绝不发信号，直接返回
+    /// Unconfirmed（保留阻塞，不丢失跟踪、不派新 attempt）。
     pub(crate) fn reclaim_group(
         &self,
-        pgid: i32,
+        identity: &GroupIdentity,
         term_budget: Duration,
         kill_budget: Duration,
     ) -> ReclaimOutcome {
+        match self.group_control.verify_ownership(identity) {
+            Ok(relay_sys::GroupOwnership::Gone) => return ReclaimOutcome::Confirmed,
+            Ok(relay_sys::GroupOwnership::Owned) => {}
+            Ok(relay_sys::GroupOwnership::Unverifiable) | Err(_) => {
+                return ReclaimOutcome::Unconfirmed;
+            }
+        }
         // 信号失败不是证据：term/kill 的 Err 不产生任何"已退出"结论。
-        let _ = self.group_control.term(pgid);
-        if self.wait_group_gone(pgid, term_budget) {
+        let _ = self.group_control.term(identity.pgid);
+        if self.wait_group_gone(identity.pgid, term_budget) {
             return ReclaimOutcome::Confirmed;
         }
-        let _ = self.group_control.kill(pgid);
-        if self.wait_group_gone(pgid, kill_budget) {
+        // 升级 SIGKILL 前再次复核归属，避免 TERM 窗口内 PID 复用误杀。
+        match self.group_control.verify_ownership(identity) {
+            Ok(relay_sys::GroupOwnership::Gone) => return ReclaimOutcome::Confirmed,
+            Ok(relay_sys::GroupOwnership::Owned) => {}
+            Ok(relay_sys::GroupOwnership::Unverifiable) | Err(_) => {
+                return ReclaimOutcome::Unconfirmed;
+            }
+        }
+        let _ = self.group_control.kill(identity.pgid);
+        if self.wait_group_gone(identity.pgid, kill_budget) {
             return ReclaimOutcome::Confirmed;
         }
         ReclaimOutcome::Unconfirmed
@@ -3658,6 +3767,13 @@ pub trait GroupControl: Send + Sync {
     /// Ok(true) = 组内仍有存活成员；Ok(false) = 组已消失（ESRCH）；
     /// Err = 探测失败（权限/IO，不可确认）。
     fn probe(&self, pgid: i32) -> std::io::Result<bool>;
+    /// 发信号前复核进程组归属（A11）；测试替身默认放行，生产实现走内核复核。
+    fn verify_ownership(
+        &self,
+        _identity: &GroupIdentity,
+    ) -> std::io::Result<relay_sys::GroupOwnership> {
+        Ok(relay_sys::GroupOwnership::Owned)
+    }
 }
 
 /// 生产实现：relay-sys 原语。
@@ -3672,6 +3788,17 @@ impl GroupControl for RealGroupControl {
     }
     fn probe(&self, pgid: i32) -> std::io::Result<bool> {
         relay_sys::group_has_members(pgid)
+    }
+    fn verify_ownership(
+        &self,
+        identity: &GroupIdentity,
+    ) -> std::io::Result<relay_sys::GroupOwnership> {
+        relay_sys::verify_group_ownership(
+            identity.pgid,
+            identity.leader_pid,
+            &identity.leader_start,
+            identity.leader_just_exited,
+        )
     }
 }
 

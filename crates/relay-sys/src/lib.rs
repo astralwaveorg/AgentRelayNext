@@ -15,6 +15,7 @@
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+#[cfg(any(target_os = "linux", test))]
 use std::process::Command;
 
 static STOP_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -132,11 +133,232 @@ pub fn killpg_kill(pgid: i32) -> io::Result<()> {
     }
 }
 
-/// 进程组是否仍有存活成员（pgrep -g 枚举）：Ok(true)=有成员，
-/// Ok(false)=组为空（全部退出），Err=无法判定（枚举失败——按不可
-/// 确认处理）。macOS 上 kill(pgid,0) 对空组返回 EPERM 而非 ESRCH，
-/// 不能用于可靠探测。
+/// 进程组归属复核结果：发信号前必须确认 `pgid` 仍属于登记时的组长。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupOwnership {
+    /// 已确认归属本工具启动的进程组，可发送信号。
+    Owned,
+    /// 进程组已无任何存活成员，无需发送信号。
+    Gone,
+    /// 无法确认归属（PID 复用、启动时间不匹配、格式无效或探测失败），禁止发信号。
+    Unverifiable,
+}
+
+/// 读取进程内核启动时间令牌（`<sec>.<usec>`；进程不存在返回 Ok(None)）。
+///
+/// 使用平台原生内核接口，不依赖外部 `ps` 可执行文件或本地化时间格式。
+pub fn process_start_token(pid: i32) -> io::Result<Option<String>> {
+    if pid <= 0 {
+        return Ok(None);
+    }
+    Ok(process_identity(pid)?.map(|(_, sec, usec)| format!("{sec}.{usec:06}")))
+}
+
+/// 发信号前复核进程组归属：核对 `leader_pid` 与登记启动时间令牌。
+///
+/// - 组已无任何存活成员 → [`GroupOwnership::Gone`]；
+/// - `leader_pid` 仍在且 `pgid` 与启动时间均匹配 → [`GroupOwnership::Owned`]；
+/// - `leader_pid` 已退出（仅当 `allow_leader_exited` 为 true，表示父进程刚在当前
+///   执行路径观察到组长退出且组内仍有后代残留）且可核验组内所有存活成员的启动时间
+///   均不早于登记组长 → [`GroupOwnership::Owned`]；
+/// - 其余情况（PID 复用、启动时间不符、令牌无效或无法核验）一律返回
+///   [`GroupOwnership::Unverifiable`]，调用方不得发送信号。
+pub fn verify_group_ownership(
+    pgid: i32,
+    leader_pid: i32,
+    expected_start: &str,
+    allow_leader_exited: bool,
+) -> io::Result<GroupOwnership> {
+    if pgid <= 0 || leader_pid <= 0 {
+        return Ok(GroupOwnership::Unverifiable);
+    }
+    let Some((exp_sec, exp_usec)) = parse_start_token(expected_start) else {
+        return Ok(GroupOwnership::Unverifiable);
+    };
+    if !group_has_members(pgid)? {
+        return Ok(GroupOwnership::Gone);
+    }
+    match process_identity(leader_pid)? {
+        Some((actual_pgid, actual_sec, actual_usec)) => {
+            if actual_pgid == pgid && actual_sec == exp_sec && actual_usec == exp_usec {
+                Ok(GroupOwnership::Owned)
+            } else {
+                Ok(GroupOwnership::Unverifiable)
+            }
+        }
+        None => {
+            if !allow_leader_exited {
+                return Ok(GroupOwnership::Unverifiable);
+            }
+            let members = group_member_pids(pgid)?;
+            if members.is_empty() {
+                return Ok(GroupOwnership::Gone);
+            }
+            let mut verified_any = false;
+            for member in members {
+                if member == leader_pid {
+                    continue;
+                }
+                let Some((m_pgid, m_sec, m_usec)) = process_identity(member)? else {
+                    continue;
+                };
+                if m_pgid != pgid || (m_sec, m_usec) < (exp_sec, exp_usec) {
+                    return Ok(GroupOwnership::Unverifiable);
+                }
+                verified_any = true;
+            }
+            if verified_any {
+                Ok(GroupOwnership::Owned)
+            } else if !group_has_members(pgid)? {
+                Ok(GroupOwnership::Gone)
+            } else {
+                Ok(GroupOwnership::Unverifiable)
+            }
+        }
+    }
+}
+
+fn parse_start_token(raw: &str) -> Option<(u64, u64)> {
+    let trimmed = raw.trim();
+    let (sec, usec) = trimmed.split_once('.')?;
+    if sec.is_empty() || usec.is_empty() {
+        return None;
+    }
+    Some((sec.parse().ok()?, usec.parse().ok()?))
+}
+
+/// 当前墙钟时间对应的 `<sec>.<usec>` 令牌（与 `process_start_token` 同格式），
+/// 仅用于在 `spawn` 前捕获启动下界以应对极快退出子进程的竞态。
+pub fn current_epoch_token() -> String {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => format!("{}.{:06}", d.as_secs(), d.subsec_micros()),
+        Err(_) => "unknown".to_owned(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+const PROC_PGRP_ONLY: u32 = 2;
+
+#[cfg(target_os = "macos")]
+fn process_identity(pid: i32) -> io::Result<Option<(i32, u64, u64)>> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let expected = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut libc::proc_bsdinfo as *mut libc::c_void,
+            expected,
+        )
+    };
+    if got == expected {
+        return Ok(Some((
+            info.pbi_pgid as i32,
+            info.pbi_start_tvsec,
+            info.pbi_start_tvusec,
+        )));
+    }
+    Ok(None)
+}
+
+#[cfg(target_os = "macos")]
+fn group_member_pids(pgid: i32) -> io::Result<Vec<i32>> {
+    let bytes =
+        unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid as u32, std::ptr::null_mut(), 0) };
+    if bytes <= 0 {
+        return Ok(Vec::new());
+    }
+    let count = (bytes as usize / std::mem::size_of::<libc::pid_t>()).saturating_add(16);
+    let mut buf = vec![0 as libc::pid_t; count];
+    let got = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            pgid as u32,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            (buf.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int,
+        )
+    };
+    if got <= 0 {
+        return Ok(Vec::new());
+    }
+    let n = (got as usize) / std::mem::size_of::<libc::pid_t>();
+    Ok(buf[..n].iter().copied().filter(|&p| p > 0).collect())
+}
+
+#[cfg(target_os = "linux")]
+fn process_identity(pid: i32) -> io::Result<Option<(i32, u64, u64)>> {
+    let path = format!("/proc/{pid}/stat");
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(end_comm) = content.rfind(')') else {
+        return Ok(None);
+    };
+    let rest: Vec<&str> = content[end_comm + 1..].split_whitespace().collect();
+    // rest[0]=state(3), rest[2]=pgrp(5), rest[19]=starttime(22)
+    let Some(pgrp) = rest.get(2).and_then(|s| s.parse::<i32>().ok()) else {
+        return Ok(None);
+    };
+    let Some(ticks) = rest.get(19).and_then(|s| s.parse::<u64>().ok()) else {
+        return Ok(None);
+    };
+    Ok(Some((pgrp, ticks, 0)))
+}
+
+#[cfg(target_os = "linux")]
+fn group_member_pids(pgid: i32) -> io::Result<Vec<i32>> {
+    let output = Command::new("/usr/bin/pgrep")
+        .arg("-g")
+        .arg(pgid.to_string())
+        .output()?;
+    match output.status.code() {
+        Some(0) => Ok(String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .filter_map(|s| s.parse::<i32>().ok())
+            .filter(|&p| p > 0)
+            .collect()),
+        Some(1) => Ok(Vec::new()),
+        Some(code) => Err(io::Error::other(format!("pgrep 退出 {code}"))),
+        None => Err(io::Error::other("pgrep 被信号终止")),
+    }
+}
+
+/// 进程组是否仍有存活成员：Ok(true)=有存活成员，Ok(false)=组为空（含仅剩已退出
+/// 僵尸进程），Err=无法判定（枚举失败——按不可确认处理）。macOS 上 kill(pgid,0)
+/// 对空组返回 EPERM 而非 ESRCH，故使用内核 `proc_listpids` + `proc_pidinfo`
+/// （Linux 使用 `/usr/bin/pgrep -g`）。
+#[cfg(target_os = "macos")]
 pub fn group_has_members(pgid: i32) -> io::Result<bool> {
+    if pgid <= 0 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "pgid 必须为正"));
+    }
+    let bytes =
+        unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid as u32, std::ptr::null_mut(), 0) };
+    if bytes < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if bytes == 0 {
+        return Ok(false);
+    }
+    let members = group_member_pids(pgid)?;
+    for pid in members {
+        if let Some((actual_pgid, _, _)) = process_identity(pid)? {
+            if actual_pgid == pgid {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "linux")]
+pub fn group_has_members(pgid: i32) -> io::Result<bool> {
+    if pgid <= 0 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "pgid 必须为正"));
+    }
     let output = Command::new("/usr/bin/pgrep")
         .arg("-g")
         .arg(pgid.to_string())
@@ -318,5 +540,90 @@ mod tests {
     fn rustix_euid() -> u32 {
         // relay-daemon 用 rustix::process::geteuid；此处经 libc 等价。
         unsafe { libc::geteuid() }
+    }
+
+    #[test]
+    fn verify_group_ownership_distinguishes_owned_forged_and_gone() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let token = process_start_token(pid).unwrap().expect("live child token");
+
+        assert_eq!(
+            verify_group_ownership(pid, pid, &token, false).unwrap(),
+            GroupOwnership::Owned
+        );
+        // 伪造/过期启动时间令牌（模拟 PID 复用）：必须拒绝发信号。
+        assert_eq!(
+            verify_group_ownership(pid, pid, "1000000000.000001", false).unwrap(),
+            GroupOwnership::Unverifiable
+        );
+        assert_eq!(
+            verify_group_ownership(pid, pid, "unknown", false).unwrap(),
+            GroupOwnership::Unverifiable
+        );
+        assert_eq!(
+            verify_group_ownership(pid, pid, "", false).unwrap(),
+            GroupOwnership::Unverifiable
+        );
+
+        let _ = killpg_kill(pid);
+        let _ = child.wait();
+        assert_eq!(
+            verify_group_ownership(pid, pid, &token, false).unwrap(),
+            GroupOwnership::Gone
+        );
+    }
+
+    #[test]
+    fn verify_group_ownership_allows_legitimate_descendant_only_when_permitted() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 30 & wait"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pgid = child.id() as i32;
+        let token = process_start_token(pgid).unwrap().expect("leader token");
+        // 等后台 sleep 启动后再仅杀组长，模拟组长退出但后代仍在。
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        unsafe {
+            libc::kill(pgid, libc::SIGKILL);
+        }
+        let _ = child.wait();
+
+        // 严苛模式（非刚收割组长）：组长已消失，不自动认定归属。
+        assert_eq!(
+            verify_group_ownership(pgid, pgid, &token, false).unwrap(),
+            GroupOwnership::Unverifiable
+        );
+        // 组长刚退出收口路径：同组后代启动时间不早于组长，允许回收。
+        assert_eq!(
+            verify_group_ownership(pgid, pgid, &token, true).unwrap(),
+            GroupOwnership::Owned
+        );
+        // 未来伪造时间：后代早于伪造组长启动时间，拒绝。
+        assert_eq!(
+            verify_group_ownership(pgid, pgid, "9999999999.000000", true).unwrap(),
+            GroupOwnership::Unverifiable
+        );
+
+        let _ = killpg_kill(pgid);
+        for _ in 0..30 {
+            if matches!(group_has_members(pgid), Ok(false)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(
+            verify_group_ownership(pgid, pgid, &token, true).unwrap(),
+            GroupOwnership::Gone
+        );
     }
 }
